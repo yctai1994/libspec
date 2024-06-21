@@ -12,8 +12,9 @@ const NewtonError = error{
 /// bracketed between `xleft` and `xright`. The root will be refined until its accuracy
 /// is known within `±xacc`.
 pub fn findRoot(
-    fcall: *const fn (x: f64) f64,
-    deriv: *const fn (x: f64) f64,
+    comptime cconv: std.builtin.CallingConvention,
+    fcall: *const fn (x: f64) callconv(cconv) f64,
+    deriv: *const fn (x: f64) callconv(cconv) f64,
     target: f64,
     xleft: f64,
     xright: f64,
