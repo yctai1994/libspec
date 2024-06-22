@@ -2,6 +2,7 @@ const std = @import("std");
 
 const findRoot = @import("./newton.zig").findRoot;
 const NormalDist = @import("./prob-dist/normal.zig").NormalDist;
+const LorentzDist = @import("./prob-dist/lorentz.zig").LorentzDist;
 
 export fn c_find_root(
     fcall: *const fn (x: f64) callconv(.C) f64,
@@ -26,9 +27,22 @@ export fn c_make_normal_dist(
     pptr: [*]f64,
     xptr: [*]f64,
     dims: usize,
-    mean: f64,
-    stdd: f64,
+    mode: f64,
+    scale: f64,
 ) void {
-    const dist: NormalDist = .{ .mean = mean, .stdd = stdd };
+    const dist: NormalDist = .{ .mode = mode, .scale = scale };
     return dist.writeAll(pptr[0..dims], xptr[0..dims]);
 }
+
+export fn c_make_lorentz_dist(
+    pptr: [*]f64,
+    xptr: [*]f64,
+    dims: usize,
+    mode: f64,
+    scale: f64,
+) void {
+    const dist: LorentzDist = .{ .mode = mode, .scale = scale };
+    return dist.writeAll(pptr[0..dims], xptr[0..dims]);
+}
+
+export fn c_make_pvoigt_dist() void {}
