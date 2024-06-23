@@ -1,8 +1,6 @@
 //! Cauchy–Lorentz Profile/Distribution
 const std = @import("std");
-const math = std.math;
-
-const pow2 = @import("../powers.zig").pow2;
+const pow2 = @import("../poly.zig").pow2;
 
 pub const LorentzDist = struct {
     mode: f64, // the value that most often appears
@@ -16,6 +14,14 @@ pub const LorentzDist = struct {
     }
 };
 
-inline fn density(x: f64, m: f64, s: f64) f64 {
-    return 1.0 / (math.pi * s * (1.0 + pow2(f64, (x - m) / s)));
+pub inline fn getFWHM(scale: f64) f64 {
+    return 2.0 * scale;
+}
+
+pub inline fn getScale(fwhm: f64) f64 {
+    return 0.5 * fwhm;
+}
+
+pub inline fn density(x: f64, m: f64, s: f64) f64 {
+    return 1.0 / (std.math.pi * s * (1.0 + pow2(f64, (x - m) / s)));
 }

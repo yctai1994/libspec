@@ -3,6 +3,7 @@ const std = @import("std");
 const findRoot = @import("./newton.zig").findRoot;
 const NormalDist = @import("./prob-dist/normal.zig").NormalDist;
 const LorentzDist = @import("./prob-dist/lorentz.zig").LorentzDist;
+const PseudoVoigtDist = @import("./prob-dist/pseudo-voigt.zig").PseudoVoigtDist;
 
 export fn c_find_root(
     fcall: *const fn (x: f64) callconv(.C) f64,
@@ -45,4 +46,14 @@ export fn c_make_lorentz_dist(
     return dist.writeAll(pptr[0..dims], xptr[0..dims]);
 }
 
-export fn c_make_pvoigt_dist() void {}
+export fn c_make_pvoigt_dist(
+    pptr: [*]f64,
+    xptr: [*]f64,
+    dims: usize,
+    mode: f64,
+    scaleN: f64,
+    scaleL: f64,
+) void {
+    const dist: PseudoVoigtDist = .{ .mode = mode, .scaleN = scaleN, .scaleL = scaleL };
+    return dist.writeAll(pptr[0..dims], xptr[0..dims]);
+}
