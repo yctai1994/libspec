@@ -4,7 +4,8 @@ const findRoot = @import("./newton.zig").findRoot;
 const NormalDist = @import("./prob-dist/normal.zig").NormalDist;
 const LorentzDist = @import("./prob-dist/lorentz.zig").LorentzDist;
 const PseudoVoigtDist = @import("./prob-dist/pseudo-voigt.zig").PseudoVoigtDist;
-const PseudoVoigtDeriv = @import("./prob-dist/pseudo-voigt-deriv.zig");
+const PseudoVoigtGamma = @import("./prob-dist/PseudoVoigtGamma.zig");
+const PseudoVoigtEta = @import("./prob-dist/PseudoVoigtEta.zig");
 
 export fn c_find_root(
     fcall: *const fn (x: f64) callconv(.C) f64,
@@ -59,10 +60,27 @@ export fn c_make_pvoigt_dist(
     return dist.writeAll(pptr[0..dims], xptr[0..dims]);
 }
 
-export fn c_Gamma(Gamma_G: f64, Gamma_L: f64) f64 {
-    return PseudoVoigtDeriv.Gamma(Gamma_G, Gamma_L);
+export fn c_dGamma(GammaG: f64, GammaL: f64, Gtot: *f64, dGds: *f64, dGdg: *f64) void {
+    var pseudo_voigt_gamma: PseudoVoigtGamma = .{};
+    pseudo_voigt_gamma.update(GammaG, GammaL);
+
+    Gtot.* = pseudo_voigt_gamma.value;
+    dGds.* = pseudo_voigt_gamma.deriv[0];
+    dGdg.* = pseudo_voigt_gamma.deriv[1];
+
+    return;
 }
 
-export fn c_dGamma(Gamma_G: f64, Gamma_L: f64, Gtot: *f64, dGds: *f64, dGdg: *f64) void {
-    return PseudoVoigtDeriv.dGamma(Gamma_G, Gamma_L, Gtot, dGds, dGdg);
+export fn c_dEta(GammaG: f64, GammaL: f64, Etot: *f64, dEds: *f64, dEdg: *f64) void {
+    var pseudo_voigt_gamma: PseudoVoigtGamma = .{};
+    pseudo_voigt_gamma.update(GammaG, GammaL);
+
+    var pseudo_voigt_eta: PseudoVoigtEta = .{};
+    pseudo_voigt_eta.update(&pseudo_voigt_gamma, GammaL);
+
+    Etot.* = pseudo_voigt_eta.value;
+    dEds.* = pseudo_voigt_eta.deriv[0];
+    dEdg.* = pseudo_voigt_eta.deriv[1];
+
+    return;
 }
