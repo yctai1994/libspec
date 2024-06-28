@@ -150,6 +150,41 @@ test "L⋅x = b" {
     try testing.expect(std.mem.eql(f64, &y, x));
 }
 
+test "Rᵀ⋅x = b" {
+    const ArrF64 = Array(f64){ .allocator = std.testing.allocator };
+    const R: [][]f64 = try ArrF64.matrix(3, 3);
+    defer ArrF64.free(R);
+
+    inline for (.{ 2.0, 6.0, 8.0 }, R[0]) |val, *ptr| ptr.* = val;
+    inline for (.{ 0.0, 1.0, 5.0 }, R[1]) |val, *ptr| ptr.* = val;
+    inline for (.{ 0.0, 0.0, 3.0 }, R[2]) |val, *ptr| ptr.* = val;
+
+    const b: []f64 = try ArrF64.vector(3);
+    defer ArrF64.free(b);
+
+    inline for (.{ 1.0, 5.0, 3.0 }, b) |val, *ptr| ptr.* = val;
+
+    const x: []f64 = try ArrF64.vector(3);
+    defer ArrF64.free(x);
+
+    const n: usize = b.len;
+
+    for (x, b) |*x_i, b_i| x_i.* = b_i;
+
+    for (R, x, 1..) |R_i, *x_i, ip1| {
+        x_i.* /= R_i[ip1 - 1];
+        for (R_i[ip1..n], x[ip1..n]) |R_ij, *x_j| x_j.* -= R_ij * x_i.*;
+    }
+
+    const y: [3]f64 = .{
+        0x1.0000000000000p-1,
+        0x1.0000000000000p+1,
+        -0x1.d555555555555p+1,
+    };
+
+    try testing.expect(std.mem.eql(f64, &y, x));
+}
+
 test "R⋅x = b" {
     const ArrF64 = Array(f64){ .allocator = std.testing.allocator };
     const R: [][]f64 = try ArrF64.matrix(3, 3);
