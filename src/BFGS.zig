@@ -115,6 +115,81 @@ test "BFGS.update" {
     }
 }
 
+test "L⋅x = b" {
+    const ArrF64 = Array(f64){ .allocator = std.testing.allocator };
+    const L: [][]f64 = try ArrF64.matrix(3, 3);
+    defer ArrF64.free(L);
+
+    inline for (.{ 2.0, 0.0, 0.0 }, L[0]) |val, *ptr| ptr.* = val;
+    inline for (.{ 6.0, 1.0, 0.0 }, L[1]) |val, *ptr| ptr.* = val;
+    inline for (.{ 8.0, 5.0, 3.0 }, L[2]) |val, *ptr| ptr.* = val;
+
+    const b: []f64 = try ArrF64.vector(3);
+    defer ArrF64.free(b);
+
+    inline for (.{ 1.0, 5.0, 3.0 }, b) |val, *ptr| ptr.* = val;
+
+    const x: []f64 = try ArrF64.vector(3);
+    defer ArrF64.free(x);
+
+    var t: f64 = undefined;
+    for (L, x, b, 0..) |L_i, *x_i, b_i, i| {
+        t = b_i;
+        for (L_i[0..i], x[0..i]) |L_ij, x_j| {
+            t -= L_ij * x_j;
+        }
+        x_i.* = t / L_i[i];
+    }
+
+    const y: [3]f64 = .{
+        0x1.0000000000000p-1,
+        0x1.0000000000000p+1,
+        -0x1.d555555555555p+1,
+    };
+
+    try testing.expect(std.mem.eql(f64, &y, x));
+}
+
+test "R⋅x = b" {
+    const ArrF64 = Array(f64){ .allocator = std.testing.allocator };
+    const R: [][]f64 = try ArrF64.matrix(3, 3);
+    defer ArrF64.free(R);
+
+    inline for (.{ 2.0, 6.0, 8.0 }, R[0]) |val, *ptr| ptr.* = val;
+    inline for (.{ 0.0, 1.0, 5.0 }, R[1]) |val, *ptr| ptr.* = val;
+    inline for (.{ 0.0, 0.0, 3.0 }, R[2]) |val, *ptr| ptr.* = val;
+
+    const b: []f64 = try ArrF64.vector(3);
+    defer ArrF64.free(b);
+
+    inline for (.{ 1.0, 5.0, 3.0 }, b) |val, *ptr| ptr.* = val;
+
+    const x: []f64 = try ArrF64.vector(3);
+    defer ArrF64.free(x);
+
+    const n: usize = b.len;
+
+    var t: f64 = undefined;
+    var i: usize = n - 1;
+    var j: usize = undefined;
+
+    while (true) : (i -= 1) {
+        t = b[i];
+        j = i + 1;
+        for (R[i][j..n], x[j..n]) |R_ij, x_j| t -= R_ij * x_j;
+        x[i] = t / R[i][i];
+        if (i == 0) break;
+    }
+
+    const y: [3]f64 = .{
+        -0x1.c000000000000p+1,
+        0x0.0000000000000p+0,
+        0x1.0000000000000p+0,
+    };
+
+    try testing.expect(std.mem.eql(f64, &y, x));
+}
+
 const std = @import("std");
 const math = std.math;
 const testing = std.testing;
