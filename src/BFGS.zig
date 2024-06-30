@@ -2,9 +2,12 @@
 //! [1] J. E. Dennis, R. B. Schnabel,
 //!     "Numerical Methods for Unconstrained Optimization and Nonlinear Equations,"
 //!     1993, Sec. 3.4
-//! [2] William H. Press, Saul A. Teukolsky, William T. Vetterling, Brian P. Flannery,
+//! [2] W. H. Press, S. A. Teukolsky, W. T. Vetterling, B. P. Flannery,
 //!     "Numerical Recipes 3rd Edition: The Art of Scientific Computing,"
 //!     2007, Sec. 2.10.1
+//! [3] J. Nocedal, S. J. Wright,
+//!     "Numerical Optimization 2nd Edition,"
+//!     2006, Procedure. 18.2
 
 xm: []f64 = undefined, // xₘ
 xn: []f64 = undefined, // xₙ
@@ -83,16 +86,10 @@ pub fn deinit(self: *const @This(), allocator: mem.Allocator) void {
     return;
 }
 
-fn test_df(x: []f64, g: []f64) void {
-    g[0] = 4 * pow3(f64, x[0] - 2) + 2 * (x[0] - 2) * pow2(f64, x[1]);
-    g[1] = 2 * pow2(f64, x[0] - 2) * x[1] + 2 * (x[1] + 1);
-    return;
-}
-
 test "BFGS.init and BFGS.deinit" {
     const page = std.testing.allocator;
 
-    var bfgs: @This() = .{ .df = test_df };
+    var bfgs: @This() = .{ .df = ellipse_deriv };
     try bfgs.init(page, 3);
     bfgs.deinit(page);
 }
@@ -109,10 +106,7 @@ fn iterate(self: *const @This()) !void {
     self.Bm.solve(self.sm, self.gm);
 
     // xₙ ← xₘ + pₘ
-    for (self.xn, self.xm, self.sm) |*xn_i, xm_i, pc_i| {
-        xn_i.* = xm_i - pc_i;
-    }
-
+    for (self.xn, self.xm, self.sm) |*xn_i, xm_i, pc_i| xn_i.* = xm_i - pc_i;
     // std.debug.print("xn = {e}\n", .{self.xn});
 
     // gₙ ← ∇f(xₙ)
@@ -120,106 +114,116 @@ fn iterate(self: *const @This()) !void {
     // std.debug.print("gn = {e}\n", .{self.gn});
 
     // sₘ ← xₙ - xₘ
-    for (self.sm, self.xn, self.xm) |*sm_i, xn_i, xm_i| {
-        sm_i.* = xn_i - xm_i;
-    }
+    for (self.sm, self.xn, self.xm) |*sm_i, xn_i, xm_i| sm_i.* = xn_i - xm_i;
     // std.debug.print("sm = {e}\n", .{self.sm});
 
     // yₘ ← ∇f(xₙ) - ∇f(xₘ) = gₙ - gₘ
-    for (self.ym, self.gn, self.gm) |*ym_i, gn_i, gm_i| {
-        ym_i.* = gn_i - gm_i;
-    }
+    for (self.ym, self.gn, self.gm) |*ym_i, gn_i, gm_i| ym_i.* = gn_i - gm_i;
     // std.debug.print("ym = {e}\n", .{self.ym});
 
-    // yₘᵀ⋅sₘ
-    var secant_norm2: f64 = 0.0;
-    for (self.ym, self.sm) |ym_i, sm_i| {
-        secant_norm2 += ym_i * sm_i;
-    }
+    // secant_norm2 ← yₘᵀ⋅sₘ
+    var secant_norm2: f64 = dot(self.ym, self.sm);
     // std.debug.print("secant_norm2 = {e}\n", .{secant_norm2});
 
-    // sₘ ← Lᵀ⋅sₘ = R⋅sₘ
+    // sₘ ← Lₘᵀ⋅sₘ = Rₘ⋅sₘ
     self.Bm.dtrmv(self.sm);
 
-    // sₘᵀ⋅(L⋅Lᵀ)⋅sₘ ← sₘᵀ⋅sₘ
-    var quadratic_form: f64 = 0.0;
-    for (self.sm) |sm_i| {
-        quadratic_form += sm_i * sm_i;
-    }
+    // sₘᵀ⋅(Lₘ⋅Lₘᵀ)⋅sₘ ← sₘᵀ⋅sₘ
+    const quadratic_form: f64 = dot(self.sm, self.sm);
     // std.debug.print("quadratic_form = {e}\n", .{quadratic_form});
+
+    // Damped BFGS parameter θₘ [3]
+    //     rₘ = θₘ⋅yₘ + (1 - θₘ)⋅Bₘ⋅sₘ
+    //     θₘ = | 1,                                    if yₘᵀ⋅sₘ ≥ 0.2⋅sₘᵀ⋅Bₘ⋅sₘ
+    //          | 0.8⋅sₘᵀ⋅Bₘ⋅sₘ / (sₘᵀ⋅Bₘ⋅sₘ - yₘᵀ⋅sₘ), if yₘᵀ⋅sₘ < 0.2⋅sₘᵀ⋅Bₘ⋅sₘ
+    // rₘᵀ⋅sₘ = | yₘᵀ⋅sₘ,                               if yₘᵀ⋅sₘ ≥ 0.2⋅sₘᵀ⋅Bₘ⋅sₘ
+    //          | 0.2⋅sₘᵀ⋅Bₘ⋅sₘ,                        if yₘᵀ⋅sₘ < 0.2⋅sₘᵀ⋅Bₘ⋅sₘ
+    var theta_m: f64 = undefined;
+    if (0.2 * quadratic_form <= secant_norm2) {
+        theta_m = 1.0;
+    } else {
+        theta_m = 0.8 * quadratic_form / (quadratic_form - secant_norm2);
+        secant_norm2 = 0.2 * quadratic_form;
+    }
+    // std.debug.print("theta_m = {d}\n", .{theta_m});
 
     // αₘ ← √(secant_norm2 / quadratic_form)
     const alpha_m: f64 = @sqrt(secant_norm2 / quadratic_form);
     // std.debug.print("alpha_m = {e}\n", .{alpha_m});
 
-    // aₘ ← αₘ⋅Lᵀ⋅sₘ = αₘ⋅R⋅sₘ
-    for (self.am, self.sm) |*am_i, sm_i| {
-        am_i.* = alpha_m * sm_i;
-    }
+    // aₘ ← αₘ⋅Lₘᵀ⋅sₘ = αₘ⋅Rₘ⋅sₘ
+    for (self.am, self.sm) |*am_i, sm_i| am_i.* = alpha_m * sm_i;
     // std.debug.print("am = {e}\n", .{self.am});
 
-    // ‖aₘ‖ ← √(yₘᵀ⋅sₘ)
+    // ‖aₘ‖ ← √(rₘᵀ⋅sₘ)
     const secant_norm: f64 = @sqrt(secant_norm2);
     // std.debug.print("secant_norm = {e}\n", .{secant_norm});
 
     // uₘ ← aₘ / ‖aₘ‖
-    for (self.um, self.am) |*um_i, am_i| {
-        um_i.* = am_i / secant_norm;
-    }
+    for (self.um, self.am) |*um_i, am_i| um_i.* = am_i / secant_norm;
     // std.debug.print("um = {e}\n", .{self.um});
 
-    // vₘ ← (yₘ - Rₘᵀ⋅aₘ) / ‖aₘ‖
-    for (self.vm, self.ym) |*vm_i, ym_i| {
-        vm_i.* = ym_i;
-    }
-    for (self.Bm.matrix, self.am, 0..) |R_i, a_i, i| {
+    // vₘ ← θₘ⋅yₘ
+    for (self.vm, self.ym) |*vm_i, ym_i| vm_i.* = theta_m * ym_i;
+
+    // vₘ ← vₘ + Rₘᵀ[(1 - θₘ - αₘ)⋅Rₘ⋅sₘ]
+    const temp: f64 = 1.0 - theta_m - alpha_m;
+    for (self.Bm.matrix, self.sm, 0..) |R_i, s_i, i| {
         for (self.vm[i..], R_i[i..]) |*v_j, R_ij| {
-            v_j.* -= R_ij * a_i;
+            v_j.* += temp * R_ij * s_i;
         }
     }
-    for (self.vm) |*vm_i| {
-        vm_i.* /= secant_norm;
-    }
+
+    // vₘ ← vₘ / ‖aₘ‖
+    for (self.vm) |*vm_i| vm_i.* /= secant_norm;
     // std.debug.print("vm = {e}\n", .{self.vm});
 
     try self.Bm.update(self.um, self.vm);
     // std.debug.print("Bm = {e}\n", .{self.Bm.matrix});
 
-    for (self.xm, self.xn) |*xm_i, xn_i| {
-        xm_i.* = xn_i;
-    }
-    for (self.gm, self.gn) |*gm_i, gn_i| {
-        gm_i.* = gn_i;
-    }
+    @memcpy(self.xm, self.xn); // copyto(self.xn, self.xm);
+    @memcpy(self.gm, self.gn); // copyto(self.gn, self.gm);
 
     return;
 }
 
-test "BFGS.iterate" {
+test "BFGS.iterate #1" {
     // Case: Example 9.2.2 in [1]
     const page = std.testing.allocator;
 
-    var bfgs: @This() = .{ .df = test_df };
+    var bfgs: @This() = .{ .df = ellipse_deriv };
     try bfgs.init(page, 2);
     defer bfgs.deinit(page);
 
     inline for (.{ 1.0, 1.0 }, bfgs.xm) |v, *p| p.* = v;
 
-    inline for (.{
-        0x1.deeea11683f49p+1,
-        -0x1.11acee560242ap+0,
-    }, bfgs.Bm.matrix[0]) |v, *p| p.* = v;
-    inline for (.{
-        0x0.0000000000000p+0,
-        0x1.b0b80ef844ba1p+0,
-    }, bfgs.Bm.matrix[1]) |v, *p| p.* = v;
+    inline for (.{ 0x1.deeea11683f49p+1, -0x1.11acee560242ap+0 }, bfgs.Bm.matrix[0]) |v, *p| p.* = v;
+    inline for (.{ 0x0.0000000000000p+0, 0x1.b0b80ef844ba1p+0 }, bfgs.Bm.matrix[1]) |v, *p| p.* = v;
 
-    for (0..13) |_| {
-        try bfgs.iterate();
-        // std.debug.print("{d}\n", .{bfgs.xm});
-    }
+    for (0..13) |_| try bfgs.iterate();
+    // std.debug.print("{d}\n", .{bfgs.xm});
 
     const y: [2]f64 = .{ 2.0, -1.0 };
+    try testing.expect(mem.eql(f64, &y, bfgs.xm));
+}
+
+test "BFGS.iterate #2" {
+    // Case: Rosenbrock's function
+    const page = std.testing.allocator;
+
+    var bfgs: @This() = .{ .df = rosenbrock_deriv };
+    try bfgs.init(page, 2);
+    defer bfgs.deinit(page);
+
+    inline for (.{ -1.2, 1.0 }, bfgs.xm) |v, *p| p.* = v;
+
+    inline for (.{ 0x1.23c0d99c17436p+5, 0x1.a52d7f6fc5311p+3 }, bfgs.Bm.matrix[0]) |v, *p| p.* = v;
+    inline for (.{ 0x0.0000000000000p+0, 0x1.4b1d7f7c3508bp+2 }, bfgs.Bm.matrix[1]) |v, *p| p.* = v;
+
+    for (0..58) |_| try bfgs.iterate();
+    // std.debug.print("{d}\n", .{bfgs.xm});
+
+    const y: [2]f64 = .{ 1.0, 1.0 };
     try testing.expect(mem.eql(f64, &y, bfgs.xm));
 }
 
@@ -349,7 +353,7 @@ const Hess = struct {
 
         // Rᵀ⋅y = b
 
-        for (x, b) |*x_i, b_i| x_i.* = b_i;
+        @memcpy(x, b); // copyto(b, x);
 
         for (self.matrix, x, 1..) |A_i, *x_i, ip1| {
             x_i.* /= A_i[ip1 - 1];
@@ -446,6 +450,67 @@ test "(RᵀR)⋅x = b" {
     };
 
     try testing.expect(mem.eql(f64, &y, x));
+}
+
+fn copyto(src: []f64, des: []f64) void {
+    const n: usize = src.len;
+    if (n != des.len) unreachable;
+
+    for (src, des) |src_i, *des_i| {
+        des_i.* = src_i;
+    }
+
+    return;
+}
+
+fn dot(x: []f64, y: []f64) f64 {
+    const n: usize = x.len;
+    if (n != y.len) unreachable;
+
+    var t: f64 = 0.0;
+
+    if (std.simd.suggestVectorLength(f64)) |s| {
+        switch (s) {
+            1 => {
+                for (x, y) |x_i, y_i| t += x_i * y_i;
+            },
+            else => {
+                if (n < s) {
+                    for (x, y) |x_i, y_i| t += x_i * y_i;
+                } else {
+                    var m: usize = @mod(n, s);
+
+                    if (m != 0) {
+                        for (x[0..m], y[0..m]) |x_i, y_i| {
+                            t += x_i * y_i;
+                        }
+                    }
+
+                    while (m < n) : (m += s) {
+                        const a: @Vector(s, f64) = x[m..][0..s].*;
+                        const b: @Vector(s, f64) = y[m..][0..s].*;
+                        t += @reduce(.Add, a * b);
+                    }
+                }
+            },
+        }
+    } else {
+        for (x, y) |x_i, y_i| t += x_i * y_i;
+    }
+
+    return t;
+}
+
+fn ellipse_deriv(x: []f64, g: []f64) void {
+    g[0] = 4 * pow3(f64, x[0] - 2) + 2 * (x[0] - 2) * pow2(f64, x[1]);
+    g[1] = 2 * pow2(f64, x[0] - 2) * x[1] + 2 * (x[1] + 1);
+    return;
+}
+
+fn rosenbrock_deriv(x: []f64, g: []f64) void {
+    g[0] = -400 * x[0] * (x[1] - pow2(f64, x[0])) - 2 * (1 - x[0]);
+    g[1] = 200 * (x[1] - pow2(f64, x[0]));
+    return;
 }
 
 const std = @import("std");
