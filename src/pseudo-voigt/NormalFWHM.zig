@@ -1,12 +1,12 @@
 scale: f64 = undefined, // σ
 value: f64 = undefined, // FWHM = 2⋅√( 2⋅log(2) )⋅σ
-
-const fwhm_factor: comptime_float = 2.0 * @sqrt(2.0 * @log(2.0));
+deriv: f64 = undefined, // dΓ/dσ
 
 const Self: type = @This();
 
 pub fn init(allocator: mem.Allocator) !*Self {
     const self: *Self = try allocator.create(Self);
+    self.deriv = comptime 2.0 * @sqrt(2.0 * @log(2.0));
     return self;
 }
 
@@ -23,8 +23,12 @@ test "allocation" {
 
 pub fn forward(self: *Self, scale: f64) void {
     self.scale = scale;
-    self.value = fwhm_factor * scale;
+    self.value = self.deriv * scale;
     return;
+}
+
+pub fn backward(self: *Self) f64 {
+    return self.deriv; // dΓ/dσ
 }
 
 test "test" {

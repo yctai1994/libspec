@@ -1,10 +1,12 @@
 scale: f64 = undefined, // γ
 value: f64 = undefined, // FWHM = 2γ
+deriv: f64 = undefined, // dΓ/dγ
 
 const Self: type = @This();
 
 pub fn init(allocator: mem.Allocator) !*Self {
     const self: *Self = try allocator.create(Self);
+    self.deriv = 2.0;
     return self;
 }
 
@@ -21,8 +23,12 @@ test "allocation" {
 
 pub fn forward(self: *Self, scale: f64) void {
     self.scale = scale;
-    self.value = 2.0 * scale;
+    self.value = self.deriv * scale;
     return;
+}
+
+pub fn backward(self: *Self) f64 {
+    return self.deriv; // dΓ/dγ
 }
 
 test "test" {

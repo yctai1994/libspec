@@ -4,6 +4,8 @@ deriv: [2]f64 = undefined, // dη/dσ, dη/dγ
 gamma: *PseudoVoigtGamma = undefined,
 lorentz: *LorentzFWHM = undefined,
 
+backproped: bool = undefined,
+
 const Eta0: comptime_float = 0.0; // η₀
 const Eta1: comptime_float = 1.36603; // η₁
 const Eta2: comptime_float = -0.47719; // η₂
@@ -17,6 +19,8 @@ pub fn init(allocator: mem.Allocator) !*Self {
 
     self.gamma = try PseudoVoigtGamma.init(allocator);
     self.lorentz = self.gamma.lorentz;
+
+    self.backproped = false;
 
     return self;
 }
@@ -39,20 +43,6 @@ pub fn forward(self: *Self, sigma: f64, gamma: f64) void {
     const alpha: f64 = self.lorentz.value / self.gamma.value;
 
     var eta: f64 = Eta3; // η = η₀ + η₁α + η₂α² + η₃α³
-
-    inline for (.{ Eta2, Eta1, Eta0 }) |coeff| {
-        eta = eta * alpha + coeff;
-    }
-
-    self.value = eta;
-
-    return;
-}
-
-pub fn update(self: *Self, Gamma: *PseudoVoigtGamma, GammaL: f64) void {
-    const alpha: f64 = GammaL / Gamma.value;
-
-    var eta: f64 = Eta3; // η = η₀ + η₁α + η₂α² + η₃α³
     var beta: f64 = 0.0; // β = dη/dα = η₁ + 2η₂α + 3η₃α²
 
     inline for (.{ Eta2, Eta1, Eta0 }) |coeff| {
@@ -62,9 +52,25 @@ pub fn update(self: *Self, Gamma: *PseudoVoigtGamma, GammaL: f64) void {
 
     self.value = eta;
 
-    const temp: f64 = alpha * beta / GammaL;
-    self.deriv[0] = -alpha * temp * Gamma.deriv[0];
-    self.deriv[1] = temp * (2.0 - alpha * Gamma.deriv[1]);
+    const temp: f64 = alpha * beta / self.lorentz.value;
+    self.deriv[0] = -alpha * temp;
+    self.deriv[1] = 2.0 * temp;
+
+    self.backproped = false;
+
+    return;
+}
+
+pub fn backward(self: *Self) void {
+    if (!self.backproped) {
+        self.gamma.backward();
+
+        self.deriv[1] = self.deriv[0] * self.gamma.deriv[1] + self.deriv[1]; // dη/dγ
+        self.deriv[0] = self.deriv[0] * self.gamma.deriv[0]; // dη/dσ
+
+        self.backproped = true;
+    }
+    return;
 }
 
 const std = @import("std");

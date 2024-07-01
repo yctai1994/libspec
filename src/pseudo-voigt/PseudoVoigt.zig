@@ -18,6 +18,7 @@ pub fn init(allocator: mem.Allocator) !*Self {
     errdefer allocator.destroy(self.normal);
 
     self.lorentz = try allocator.create(PseudoVoigtLorentz);
+    self.lorentz.gamma = self.gamma;
 
     return self;
 }
@@ -39,7 +40,7 @@ test "allocation" {
 pub fn forward(self: *Self, mu: f64, sigma: f64, gamma: f64) void {
     self.eta.forward(sigma, gamma);
     self.normal.forward(mu, self.gamma);
-    self.lorentz.forward(mu, self.gamma);
+    self.lorentz.forward(mu);
     return;
 }
 
