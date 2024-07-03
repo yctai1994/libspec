@@ -21,7 +21,6 @@ fn init(allocator: mem.Allocator, tape: []f64, gamma: *PseudoVoigtGamma) !*Self 
 
     self.scale = try PseudoLorentzScale.init(allocator, tape, gamma);
 
-    self.deriv = 1.0; // should be removed later
     self.deriv_in = &tape[0];
     self.deriv_out = &tape[2];
 
@@ -33,20 +32,6 @@ fn deinit(self: *Self, allocator: mem.Allocator) void {
     self.scale.deinit(allocator);
     allocator.destroy(self);
     return;
-}
-
-test "allocation" {
-    const page = testing.allocator;
-
-    var tape: []f64 = try page.alloc(f64, 9);
-    defer page.free(tape);
-    _ = &tape;
-
-    const gamma: *PseudoVoigtGamma = try PseudoVoigtGamma.init(page, tape);
-    defer gamma.deinit(page);
-
-    const lorentz: *Self = try Self.init(page, tape, gamma);
-    defer lorentz.deinit(page);
 }
 
 pub fn forward(self: *@This(), x: f64) void {
@@ -75,28 +60,22 @@ pub fn backward(self: *Self) void {
     return;
 }
 
-fn pow2(x: f64) f64 {
-    return x * x;
-}
-
-test "backward" {
+test "backward: y ≡ PL" {
     const page = testing.allocator;
 
-    // Tape: [dy/dPpV, dy/dPG, dy/dPL, dy/dσV, dy/dγV, dy/dη, dy/dΓtot, dy/dΓG, dy/dΓL]
     var tape: []f64 = try page.alloc(f64, 9);
     defer page.free(tape);
+
+    @memset(tape, 1.0);
+    _ = &tape;
 
     // deriv := [dy/dμ, dy/dσ, dy/dγ]
     var deriv: []f64 = try page.alloc(f64, 3);
     defer page.free(deriv);
     _ = &deriv;
 
-    for (0..9) |i| tape[i] = 1.0;
-
     const gamma: *PseudoVoigtGamma = try PseudoVoigtGamma.init(page, tape);
     defer gamma.deinit(page);
-
-    gamma.deriv[2] = 0.0; // turn off dη/dΓtot
 
     const lorentz: *Self = try Self.init(page, tape, gamma);
     defer lorentz.deinit(page);
@@ -109,6 +88,9 @@ test "backward" {
     lorentz.mode.forward(_mode_); // should be improved
     gamma.forward(_sigma_, _gamma_);
     lorentz.forward(_x_);
+
+    // Produce dy/dPL = dPL/dPL = 1
+    lorentz.deriv = 1.0;
 
     lorentz.backward();
     lorentz.mode.backward(&deriv[0]); // should be improved
@@ -123,6 +105,10 @@ test "backward" {
         "dPL        = {d} @ ({d}, {d}, {d}, {d})\n",
         .{ deriv, _x_, _mode_, _sigma_, _gamma_ },
     );
+}
+
+fn pow2(x: f64) f64 {
+    return x * x;
 }
 
 const std = @import("std");

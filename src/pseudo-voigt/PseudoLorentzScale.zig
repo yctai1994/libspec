@@ -14,7 +14,6 @@ pub fn init(allocator: mem.Allocator, tape: []f64, gamma: *PseudoVoigtGamma) !*S
 
     var self: *Self = try allocator.create(Self);
 
-    self.deriv = 1.0; // should be removed later
     self.deriv_in = &tape[2];
     self.deriv_out = &tape[4];
 
@@ -26,20 +25,6 @@ pub fn init(allocator: mem.Allocator, tape: []f64, gamma: *PseudoVoigtGamma) !*S
 pub fn deinit(self: *Self, allocator: mem.Allocator) void {
     allocator.destroy(self);
     return;
-}
-
-test "allocation" {
-    const page = testing.allocator;
-
-    var tape: []f64 = try page.alloc(f64, 9);
-    defer page.free(tape);
-    _ = &tape;
-
-    const gamma: *PseudoVoigtGamma = try PseudoVoigtGamma.init(page, tape);
-    defer gamma.deinit(page);
-
-    const scale: *Self = try Self.init(page, tape, gamma);
-    defer scale.deinit(page);
 }
 
 pub fn forward(self: *Self) void {

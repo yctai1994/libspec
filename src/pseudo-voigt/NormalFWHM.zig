@@ -17,7 +17,6 @@ pub fn init(allocator: mem.Allocator, tape: []f64) !*Self {
 
     self.scale = try NormalScale.init(allocator, tape);
 
-    self.deriv = 1.0; // should be removed later
     self.deriv_in = &tape[6];
     self.deriv_out = &tape[7];
 

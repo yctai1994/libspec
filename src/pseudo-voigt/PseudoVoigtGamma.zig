@@ -28,7 +28,6 @@ pub fn init(allocator: mem.Allocator, tape: []f64) !*Self {
 
     self.lorentz = try LorentzFWHM.init(allocator, tape);
 
-    self.deriv = .{ 0.0, 0.0, 1.0 }; // should be removed later
     self.deriv_in = tape[3..6];
     self.deriv_out = &tape[6];
 
@@ -40,17 +39,6 @@ pub fn deinit(self: *Self, allocator: mem.Allocator) void {
     self.lorentz.deinit(allocator);
     allocator.destroy(self);
     return;
-}
-
-test "allocation" {
-    const page = testing.allocator;
-
-    var tape: []f64 = try page.alloc(f64, 9);
-    defer page.free(tape);
-    _ = &tape;
-
-    const gamma: *Self = try Self.init(page, tape);
-    defer gamma.deinit(page);
 }
 
 pub fn forward(self: *Self, sigma: f64, gamma: f64) void {
@@ -112,19 +100,19 @@ pub fn backward(self: *Self, final_deriv_out: []f64) void {
     return;
 }
 
-test "backward" {
+test "backward: y ≡ Γtot" {
     const page = testing.allocator;
 
-    // Tape: [dy/dPpV, dy/dPG, dy/dPL, dy/dσV, dy/dγV, dy/dη, dy/dΓtot, dy/dΓG, dy/dΓL]
     var tape: []f64 = try page.alloc(f64, 9);
     defer page.free(tape);
+
+    @memset(tape, 1.0);
+    _ = &tape;
 
     // deriv := [dy/dσ, dy/dγ]
     var deriv: []f64 = try page.alloc(f64, 2);
     defer page.free(deriv);
     _ = &deriv;
-
-    for (0..9) |i| tape[i] = 1.0;
 
     const gamma: *Self = try Self.init(page, tape);
     defer gamma.deinit(page);
@@ -133,6 +121,14 @@ test "backward" {
     const _gamma_: f64 = 1.305;
 
     gamma.forward(_sigma_, _gamma_);
+
+    // Produce dy/dΓtot = dΓtot/dΓtot = 1
+    gamma.deriv = .{
+        0x1.5555555555555p-2,
+        0x1.5555555555555p-2,
+        0x1.5555555555555p-2,
+    };
+
     gamma.backward(deriv);
 
     std.debug.print("Gamma_tot  = {d} @ ({d}, {d})\n", .{ gamma.value, _sigma_, _gamma_ });

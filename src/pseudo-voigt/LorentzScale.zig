@@ -10,8 +10,9 @@ pub fn init(allocator: mem.Allocator, tape: []f64) !*Self {
     if (tape.len != 9) unreachable;
 
     var self: *Self = try allocator.create(Self);
-    self.deriv = 1.0; // should be removed later
+
     self.deriv_in = &tape[8];
+
     return self;
 }
 

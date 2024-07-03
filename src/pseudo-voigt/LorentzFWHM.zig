@@ -17,7 +17,6 @@ pub fn init(allocator: mem.Allocator, tape: []f64) !*Self {
 
     self.scale = try LorentzScale.init(allocator, tape);
 
-    self.deriv = .{ 0.0, 1.0 };
     self.deriv_in = tape[5..7];
     self.deriv_out = &tape[8];
 

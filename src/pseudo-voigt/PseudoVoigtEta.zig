@@ -25,7 +25,6 @@ fn init(allocator: mem.Allocator, tape: []f64) !*Self {
 
     self.lorentz = self.gamma.lorentz;
 
-    self.deriv = 1.0; // should be removed later
     self.deriv_in = &tape[0];
     self.deriv_out = &tape[5];
 
@@ -36,17 +35,6 @@ fn deinit(self: *Self, allocator: mem.Allocator) void {
     self.gamma.deinit(allocator);
     allocator.destroy(self);
     return;
-}
-
-test "allocation" {
-    const page = testing.allocator;
-
-    var tape: []f64 = try page.alloc(f64, 9);
-    defer page.free(tape);
-    _ = &tape;
-
-    const eta: *Self = try Self.init(page, tape);
-    defer eta.deinit(page);
 }
 
 pub fn forward(self: *Self, sigma: f64, gamma: f64) void {
@@ -83,19 +71,19 @@ pub fn backward(self: *Self, final_deriv_out: []f64) void {
     return;
 }
 
-test "backward" {
+test "backward: y ≡ η" {
     const page = testing.allocator;
 
-    // Tape: [dy/dPpV, dy/dPG, dy/dPL, dy/dσV, dy/dγV, dy/dη, dy/dΓtot, dy/dΓG, dy/dΓL]
     var tape: []f64 = try page.alloc(f64, 9);
     defer page.free(tape);
+
+    @memset(tape, 1.0);
+    _ = &tape;
 
     // deriv := [dy/dσ, dy/dγ]
     var deriv: []f64 = try page.alloc(f64, 2);
     defer page.free(deriv);
     _ = &deriv;
-
-    for (0..9) |i| tape[i] = 1.0;
 
     const eta: *Self = try Self.init(page, tape);
     defer eta.deinit(page);
@@ -104,10 +92,20 @@ test "backward" {
     const _gamma_: f64 = 1.305;
 
     eta.forward(_sigma_, _gamma_);
+
+    // Produce dy/dη = dη/dη = 1
+    eta.deriv = 1.0;
+
     eta.backward(deriv);
 
-    std.debug.print("Eta        = {d} @ ({d}, {d})\n", .{ eta.value, _sigma_, _gamma_ });
-    std.debug.print("dEta       = {d} @ ({d}, {d})\n", .{ deriv, _sigma_, _gamma_ });
+    std.debug.print(
+        "Eta        = {d} @ ({d}, {d})\n",
+        .{ eta.value, _sigma_, _gamma_ },
+    );
+    std.debug.print(
+        "dEta       = {d} @ ({d}, {d})\n",
+        .{ deriv, _sigma_, _gamma_ },
+    );
 }
 
 const std = @import("std");
