@@ -1,4 +1,5 @@
-// Tape: [dy/dPpV, dy/dPG, dy/dPL, dy/dσV, dy/dγV, dy/dη, dy/dΓtot, dy/dΓG, dy/dΓL]
+//! LorentzFWHM.zig
+//! Tape: [dy/dPpV, dy/dPG, dy/dPL, dy/dσV, dy/dγV, dy/dη, dy/dΓtot, dy/dΓG, dy/dΓL]
 value: f64 = undefined,
 deriv: [2]f64 = undefined, // [ dη/dΓL, dΓtot/dΓL ]
 deriv_in: []f64 = undefined, // [ dy/dη, dy/dΓtot ]

@@ -1,4 +1,5 @@
-// Tape: [dy/dPpV, dy/dPG, dy/dPL, dy/dσV, dy/dγV, dy/dη, dy/dΓtot, dy/dΓG, dy/dΓL]
+//! PseudoVoigtEta.zig
+//! Tape: [dy/dPpV, dy/dPG, dy/dPL, dy/dσV, dy/dγV, dy/dη, dy/dΓtot, dy/dΓG, dy/dΓL]
 value: f64 = undefined,
 deriv: f64 = undefined, // dPpV/dη
 deriv_in: *f64 = undefined, // dy/dPpV

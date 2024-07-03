@@ -1,4 +1,5 @@
-// Tape: [dy/dPpV, dy/dPG, dy/dPL, dy/dσV, dy/dγV, dy/dη, dy/dΓtot, dy/dΓG, dy/dΓL]
+//! NormalScale.zig
+//! Tape: [dy/dPpV, dy/dPG, dy/dPL, dy/dσV, dy/dγV, dy/dη, dy/dΓtot, dy/dΓG, dy/dΓL]
 value: f64 = undefined, // σ
 deriv: f64 = undefined, // dΓG/dσ
 deriv_in: *f64 = undefined, // dy/dΓG

@@ -1,4 +1,5 @@
-// Tape: [dy/dPpV, dy/dPG, dy/dPL, dy/dσV, dy/dγV, dy/dη, dy/dΓtot, dy/dΓG, dy/dΓL]
+//! PseudoVoigtGamma.zig
+//! Tape: [dy/dPpV, dy/dPG, dy/dPL, dy/dσV, dy/dγV, dy/dη, dy/dΓtot, dy/dΓG, dy/dΓL]
 value: f64 = undefined,
 deriv: [3]f64 = undefined, // [ dσV/dΓtot, dγV/dΓtot, dη/dΓtot ]
 deriv_in: []f64 = undefined, // [ dy/dσV, dy/dγV, dy/dη ]
@@ -90,6 +91,7 @@ pub fn forward(self: *Self, sigma: f64, gamma: f64) void {
     self.value = Gtot;
     self.normal.deriv = temp * dGdG; // dΓtot/dΓG
     self.lorentz.deriv[1] = temp * dGdL; // [ dη/dΓL, dΓtot/dΓL ]
+
     return;
 }
 
