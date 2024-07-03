@@ -1,7 +1,7 @@
-// Tape: [..., dy/dΓtot, dy/dΓG, dy/dΓL]
+// Tape: [dy/dPpV, dy/dPG, dy/dPL, dy/dσV, dy/dγV, dy/dη, dy/dΓtot, dy/dΓG, dy/dΓL]
 value: f64 = undefined,
-deriv: f64 = undefined, // dΓtot/dΓL
-deriv_in: *f64 = undefined, // dy/dΓtot
+deriv: [2]f64 = undefined, // [ dη/dΓL, dΓtot/dΓL ]
+deriv_in: []f64 = undefined, // [ dy/dη, dy/dΓtot ]
 deriv_out: *f64 = undefined, // dy/dΓL
 
 scale: *LorentzScale = undefined,
@@ -9,15 +9,16 @@ scale: *LorentzScale = undefined,
 const Self = @This();
 
 pub fn init(allocator: mem.Allocator, tape: []f64) !*Self {
-    if (tape.len != 3) unreachable;
+    if (tape.len != 9) unreachable;
 
     var self: *Self = try allocator.create(Self);
     errdefer allocator.destroy(self);
 
-    self.scale = try LorentzScale.init(allocator, &tape[2]);
+    self.scale = try LorentzScale.init(allocator, tape);
 
-    self.deriv_in = &tape[0];
-    self.deriv_out = &tape[2];
+    self.deriv = .{ 0.0, 1.0 };
+    self.deriv_in = tape[5..7];
+    self.deriv_out = &tape[8];
 
     return self;
 }
@@ -36,8 +37,13 @@ pub fn forward(self: *Self, scale: f64) void {
 }
 
 pub fn backward(self: *Self, final_deriv_out: *f64) void {
-    // dy/dΓL = (dΓtot/dΓL) × (dy/dΓtot)
-    self.deriv_out.* = self.deriv * self.deriv_in.*;
+    // (dy/dΓL) = [ dη/dΓL, dΓtot/dΓL ]ᵀ ⋅ [ dy/dη, dy/dΓtot ]
+    var temp: f64 = 0.0;
+    for (self.deriv, self.deriv_in) |deriv, deriv_in| {
+        temp += deriv * deriv_in;
+    }
+
+    self.deriv_out.* = temp;
     self.scale.backward(final_deriv_out); // final_deriv_out := &(dy/dγ)
     return;
 }

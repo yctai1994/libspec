@@ -1,4 +1,4 @@
-// Tape: [..., dy/dΓtot, dy/dΓG, dy/dΓL]
+// Tape: [dy/dPpV, dy/dPG, dy/dPL, dy/dσV, dy/dγV, dy/dη, dy/dΓtot, dy/dΓG, dy/dΓL]
 value: f64 = undefined,
 deriv: f64 = undefined, // dΓtot/dΓG
 deriv_in: *f64 = undefined, // dy/dΓtot
@@ -9,15 +9,16 @@ scale: *NormalScale = undefined,
 const Self = @This();
 
 pub fn init(allocator: mem.Allocator, tape: []f64) !*Self {
-    if (tape.len != 3) unreachable;
+    if (tape.len != 9) unreachable;
 
     var self: *Self = try allocator.create(Self);
     errdefer allocator.destroy(self);
 
-    self.scale = try NormalScale.init(allocator, &tape[1]);
+    self.scale = try NormalScale.init(allocator, tape);
 
-    self.deriv_in = &tape[0];
-    self.deriv_out = &tape[1];
+    self.deriv = 1.0; // should be removed later
+    self.deriv_in = &tape[6];
+    self.deriv_out = &tape[7];
 
     return self;
 }

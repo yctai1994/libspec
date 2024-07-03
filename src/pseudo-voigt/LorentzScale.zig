@@ -1,13 +1,16 @@
-// Tape: [..., dy/dΓG, dy/dΓL]
+// Tape: [dy/dPpV, dy/dPG, dy/dPL, dy/dσV, dy/dγV, dy/dη, dy/dΓtot, dy/dΓG, dy/dΓL]
 value: f64 = undefined, // γ
 deriv: f64 = undefined, // dΓL/dγ
 deriv_in: *f64 = undefined, // dy/dΓL
 
 const Self: type = @This();
 
-pub fn init(allocator: mem.Allocator, deriv_in: *f64) !*Self {
+pub fn init(allocator: mem.Allocator, tape: []f64) !*Self {
+    if (tape.len != 9) unreachable;
+
     var self: *Self = try allocator.create(Self);
-    self.deriv_in = deriv_in;
+    self.deriv = 1.0; // should be removed later
+    self.deriv_in = &tape[8];
     return self;
 }
 

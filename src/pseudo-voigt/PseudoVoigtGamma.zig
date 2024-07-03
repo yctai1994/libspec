@@ -1,7 +1,7 @@
-// Tape: [..., dy/dσV, dy/dγV, dy/dΓtot, dy/dΓG, dy/dΓL]
+// Tape: [dy/dPpV, dy/dPG, dy/dPL, dy/dσV, dy/dγV, dy/dη, dy/dΓtot, dy/dΓG, dy/dΓL]
 value: f64 = undefined,
-deriv: [2]f64 = undefined, // [ dσV/dΓtot, dγV/dΓtot ]
-deriv_in: []f64 = undefined, // [ dy/dσV, dy/dγV ]
+deriv: [3]f64 = undefined, // [ dσV/dΓtot, dγV/dΓtot, dη/dΓtot ]
+deriv_in: []f64 = undefined, // [ dy/dσV, dy/dγV, dy/dη ]
 deriv_out: *f64 = undefined, // dy/dΓtot
 
 normal: *NormalFWHM = undefined,
@@ -16,25 +16,25 @@ const G5: comptime_float = 1.0;
 
 const Self: type = @This();
 
-fn init(allocator: mem.Allocator, tape: []f64) !*Self {
-    if (tape.len != 5) unreachable;
+pub fn init(allocator: mem.Allocator, tape: []f64) !*Self {
+    if (tape.len != 9) unreachable;
 
     var self: *Self = try allocator.create(Self);
     errdefer allocator.destroy(self);
 
-    self.normal = try NormalFWHM.init(allocator, tape[2..]);
+    self.normal = try NormalFWHM.init(allocator, tape);
     errdefer self.normal.deinit(allocator);
 
-    self.lorentz = try LorentzFWHM.init(allocator, tape[2..]);
+    self.lorentz = try LorentzFWHM.init(allocator, tape);
 
-    self.deriv = .{ 0.5, 0.5 }; // should be removed later
-    self.deriv_in = tape[0..2];
-    self.deriv_out = &tape[2];
+    self.deriv = .{ 0.0, 0.0, 1.0 }; // should be removed later
+    self.deriv_in = tape[3..6];
+    self.deriv_out = &tape[6];
 
     return self;
 }
 
-fn deinit(self: *Self, allocator: mem.Allocator) void {
+pub fn deinit(self: *Self, allocator: mem.Allocator) void {
     self.normal.deinit(allocator);
     self.lorentz.deinit(allocator);
     allocator.destroy(self);
@@ -44,7 +44,7 @@ fn deinit(self: *Self, allocator: mem.Allocator) void {
 test "allocation" {
     const page = testing.allocator;
 
-    var tape: []f64 = try page.alloc(f64, 5);
+    var tape: []f64 = try page.alloc(f64, 9);
     defer page.free(tape);
     _ = &tape;
 
@@ -89,8 +89,7 @@ pub fn forward(self: *Self, sigma: f64, gamma: f64) void {
 
     self.value = Gtot;
     self.normal.deriv = temp * dGdG; // dΓtot/dΓG
-    self.lorentz.deriv = temp * dGdL; // dΓtot/dΓL
-
+    self.lorentz.deriv[1] = temp * dGdL; // [ dη/dΓL, dΓtot/dΓL ]
     return;
 }
 
@@ -98,7 +97,7 @@ pub fn backward(self: *Self, final_deriv_out: []f64) void {
     // final_deriv_out := [dy/dσ, dy/dγ]
     if (final_deriv_out.len != 2) unreachable;
 
-    // (dy/dΓtot) = [dσV/dΓtot, dγV/dΓtot]ᵀ ⋅ [dy/dσV, dy/dγV]
+    // (dy/dΓtot) = [ dσV/dΓtot, dγV/dΓtot, dη/dΓtot ]ᵀ ⋅ [ dy/dσV, dy/dγV, dy/dη ]
     var temp: f64 = 0.0;
     for (self.deriv, self.deriv_in) |deriv, deriv_in| {
         temp += deriv * deriv_in;
@@ -114,8 +113,8 @@ pub fn backward(self: *Self, final_deriv_out: []f64) void {
 test "backward" {
     const page = testing.allocator;
 
-    // Tape: [dy/dσV, dy/dγV, dy/dΓtot, dy/dΓG, dy/dΓL]
-    var tape: []f64 = try page.alloc(f64, 5);
+    // Tape: [dy/dPpV, dy/dPG, dy/dPL, dy/dσV, dy/dγV, dy/dη, dy/dΓtot, dy/dΓG, dy/dΓL]
+    var tape: []f64 = try page.alloc(f64, 9);
     defer page.free(tape);
 
     // deriv := [dy/dσ, dy/dγ]
@@ -123,17 +122,19 @@ test "backward" {
     defer page.free(deriv);
     _ = &deriv;
 
-    tape[0] = 1.0;
-    tape[1] = 1.0;
+    for (0..9) |i| tape[i] = 1.0;
 
     const gamma: *Self = try Self.init(page, tape);
     defer gamma.deinit(page);
 
-    gamma.forward(2.171, 1.305);
+    const _sigma_: f64 = 2.171;
+    const _gamma_: f64 = 1.305;
+
+    gamma.forward(_sigma_, _gamma_);
     gamma.backward(deriv);
 
-    std.debug.print("Gamma_tot = {d}\n", .{gamma.value});
-    std.debug.print("dGamma_tot = {d}\n", .{deriv});
+    std.debug.print("Gamma_tot  = {d} @ ({d}, {d})\n", .{ gamma.value, _sigma_, _gamma_ });
+    std.debug.print("dGamma_tot = {d} @ ({d}, {d})\n", .{ deriv, _sigma_, _gamma_ });
 }
 
 const std = @import("std");
