@@ -28,7 +28,7 @@ fn init(allocator: mem.Allocator) !*Self {
     self.gamma = try PseudoVoigtGamma.init(allocator, self.tape);
     errdefer self.gamma.deinit(allocator);
 
-    self.eta = try PseudoVoigtEta.init(allocator, self.gamma);
+    self.eta = try PseudoVoigtEta.init(allocator, self.gamma, self.tape);
     errdefer self.eta.deinit(allocator);
 
     // = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = =
@@ -77,13 +77,33 @@ test "init" {
 // = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = =
 
 const PseudoVoigtEta = struct {
+    value: f64 = undefined,
+    deriv: f64 = undefined, // dPpV/dη
+    deriv_in: *f64 = undefined, // dy/dPpV
+    deriv_out: *f64 = undefined, // dy/dη
+
     gamma: *PseudoVoigtGamma, // handled by PseudoVoigt
     lorentz: *LorentzFWHM, // handled by PseudoVoigtGamma
 
-    fn init(allocator: mem.Allocator, gamma: *PseudoVoigtGamma) !*PseudoVoigtEta {
+    const Eta0: comptime_float = 0.0; // η₀
+    const Eta1: comptime_float = 1.36603; // η₁
+    const Eta2: comptime_float = -0.47719; // η₂
+    const Eta3: comptime_float = 0.11116; // η₃
+
+    fn init(
+        allocator: mem.Allocator,
+        gamma: *PseudoVoigtGamma,
+        tape: []f64,
+    ) !*PseudoVoigtEta {
+        if (tape.len != 10) unreachable;
+
         const self = try allocator.create(PseudoVoigtEta);
         self.gamma = gamma;
         self.lorentz = gamma.lorentz;
+
+        self.deriv_in = &tape[1];
+        self.deriv_out = &tape[6];
+
         return self;
     }
 
@@ -91,7 +111,69 @@ const PseudoVoigtEta = struct {
         allocator.destroy(self);
         return;
     }
+
+    fn forward(self: *PseudoVoigtEta) void {
+        const alpha: f64 = self.lorentz.value / self.gamma.value;
+
+        var eta: f64 = Eta3; // η = η₀ + η₁α + η₂α² + η₃α³
+        var beta: f64 = 0.0; // β = dη/dα = η₁ + 2η₂α + 3η₃α²
+
+        inline for (.{ Eta2, Eta1, Eta0 }) |coeff| {
+            beta = beta * alpha + eta;
+            eta = eta * alpha + coeff;
+        }
+
+        self.value = eta;
+
+        beta /= self.gamma.value;
+
+        self.gamma.deriv[2] = -alpha * beta; // [ dσV/dΓtot, dγV/dΓtot, dη/dΓtot ]
+        self.lorentz.deriv[0] = beta; // [ dη/dΓL, dΓtot/dΓL ]
+
+        return;
+    }
+
+    fn backward(self: *PseudoVoigtEta, final_deriv_out: []f64) void {
+        // final_deriv_out := [ dy/dμ, dy/dσ, dy/dγ ]
+        if (final_deriv_out.len != 3) unreachable;
+
+        // (dy/dη) = (dPpV/dη) × (dy/dPpV)
+        self.deriv_out.* = self.deriv * self.deriv_in.*;
+
+        return;
+    }
 };
+
+test "backward: y ≡ η" {
+    const page = testing.allocator;
+
+    const pseudo_voigt: *Self = try Self.init(page);
+    defer pseudo_voigt.deinit(page);
+
+    const deriv: []f64 = try page.alloc(f64, 3);
+    defer page.free(deriv);
+
+    const _sigma_: f64 = 2.171;
+    const _gamma_: f64 = 1.305;
+
+    pseudo_voigt.gamma.forward(_sigma_, _gamma_);
+    pseudo_voigt.eta.forward();
+
+    // Produce dy/dη = dη/dη = 1
+    pseudo_voigt.eta.deriv = 1.0;
+
+    pseudo_voigt.eta.backward(deriv);
+    pseudo_voigt.gamma.backward(deriv);
+
+    std.debug.print(
+        "Eta        = {d} @ ({d}, {d})\n",
+        .{ pseudo_voigt.eta.value, _sigma_, _gamma_ },
+    );
+    std.debug.print(
+        "dEta       = {d} @ ({d}, {d})\n",
+        .{ deriv, _sigma_, _gamma_ },
+    );
+}
 
 // = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = =
 
