@@ -1,20 +1,12 @@
+//! Log-Likelihood of Weighted Pseudo-Voigt Function:
 //! Tape:
-//! [ dy/d(log-likelihood), dy/dPpV, dy/dPN,   dy/dPL, dy/dσV,
-//!                 dy/dγV, dy/dη,   dy/dΓtot, dy/dΓG, dy/dΓL ]
+//! [ dy/d(logL), dy/dPpV, dy/dPN,   dy/dPL, dy/dσV,
+//!       dy/dγV, dy/dη,   dy/dΓtot, dy/dΓG, dy/dΓL ]
 tape: []f64,
-value: f64, // PpV
-deriv: f64, // d(log-likelihood)/d(PpV)
-deriv_in: *f64, // dy/d(log-likelihood)
-deriv_out: *f64, // dy/d(PpV)
+value: f64, // logL
+pseudo_voigt: *PseudoVoigt,
 
-eta: *PseudoVoigtEta,
-gamma: *PseudoVoigtGamma, // for convenience
-
-mode: *PseudoVoigtMode, // for convenience
-normal: *PseudoVoigtNormal,
-lorentz: *PseudoVoigtLorentz,
-
-const Self: type = @This(); // PseudoVoigt
+const Self: type = @This();
 
 fn init(allocator: mem.Allocator) !*Self {
     const self = try allocator.create(Self);
@@ -23,41 +15,15 @@ fn init(allocator: mem.Allocator) !*Self {
     self.tape = try allocator.alloc(f64, 10);
     errdefer allocator.free(self.tape);
 
-    // = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = =
-
-    self.gamma = try PseudoVoigtGamma.init(allocator, self.tape);
-    errdefer self.gamma.deinit(allocator);
-
-    self.eta = try PseudoVoigtEta.init(allocator, self.gamma, self.tape);
-    errdefer self.eta.deinit(allocator);
-
-    // = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = =
-
-    self.mode = try PseudoVoigtMode.init(allocator, self.tape);
-    errdefer self.mode.deinit(allocator);
-
-    self.normal = try PseudoVoigtNormal.init(allocator, self.mode, self.gamma, self.tape);
-    errdefer self.normal.deinit(allocator);
-
-    self.lorentz = try PseudoVoigtLorentz.init(allocator, self.mode, self.gamma, self.tape);
-
-    // = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = =
+    self.pseudo_voigt = try PseudoVoigt.init(allocator, self.tape);
 
     @memset(self.tape, 1.0);
-
-    self.deriv_in = &self.tape[0]; // dy/d(log-likelihood)
-    self.deriv_out = &self.tape[1]; // dy/d(PpV)
 
     return self;
 }
 
 fn deinit(self: *Self, allocator: mem.Allocator) void {
-    self.lorentz.deinit(allocator);
-    self.normal.deinit(allocator);
-    self.mode.deinit(allocator);
-
-    self.eta.deinit(allocator);
-    self.gamma.deinit(allocator);
+    self.pseudo_voigt.deinit(allocator);
 
     allocator.free(self.tape);
     allocator.destroy(self);
@@ -65,67 +31,209 @@ fn deinit(self: *Self, allocator: mem.Allocator) void {
     return;
 }
 
-fn preforward(self: *Self, mu: f64, sigma: f64, gamma: f64) void {
-    self.mode.forward(mu);
-    self.gamma.forward(sigma, gamma);
-    self.normal.scale.forward();
-    self.lorentz.scale.forward();
-    self.eta.forward();
+inline fn preforward(self: *Self, params: []f64) void {
+    if (params.len != 3) unreachable; // [ μ, σ, γ ]
+    self.pseudo_voigt.preforward(params[0], params[1], params[2]);
     return;
 }
 
-fn forward(self: *Self, x: f64) void {
-    self.normal.forward(x);
-    self.lorentz.forward(x);
+fn backward(self: *Self, xvec: []f64, wvec: []f64, dvec: []f64) void {
+    if (dvec.len != 3) unreachable; // [ dy/dμ, dy/dσ, dy/dγ ]
 
-    const arg1: f64 = self.eta.value;
-    const arg2: f64 = 1.0 - arg1;
+    @memset(dvec, 0.0); // init
+    self.value = 0.0;
+    var dtmp: [3]f64 = undefined;
 
-    self.value = arg1 * self.lorentz.value + arg2 * self.normal.value;
+    self.pseudo_voigt.deriv = 1.0;
 
-    self.normal.deriv = arg2; // dPpV/dPN
-    self.lorentz.deriv = arg1; // dPpV/dPL
-    self.eta.deriv = self.lorentz.value - self.normal.value; // dPpV/dη
-
-    return;
-}
-
-fn backward(self: *Self, final_deriv_out: []f64) void {
-    if (final_deriv_out.len != 3) unreachable; // [ dy/dμ, dy/dσ, dy/dγ ]
-
-    // (dy/dPpV) = (d(log-likelihood)/dPpV) × (dy/d(log-likelihood))
-    self.deriv_out.* = self.deriv * self.deriv_in.*;
-
-    self.normal.backward();
-    self.lorentz.backward();
-    self.mode.backward(final_deriv_out);
-
-    self.eta.backward();
-    self.gamma.backward(final_deriv_out);
+    for (xvec, wvec) |xn, wn| {
+        self.pseudo_voigt.forward(xn);
+        const prob: f64 = self.pseudo_voigt.value; // PpV
+        self.value += wn * @log(prob);
+        self.pseudo_voigt.backward(&dtmp);
+        const temp: f64 = wn / prob;
+        for (dvec, dtmp) |*ddes, dsrc| {
+            ddes.* += temp * dsrc;
+        }
+    }
 
     return;
 }
 
-test "Pseudo-Voigt Function Reverse Autodifferentiation, y = PpV" {
+test "1" {
     const page = testing.allocator;
 
-    const pseudo_voigt: *Self = try Self.init(page);
-    defer pseudo_voigt.deinit(page);
+    const log_likelihood: *Self = try Self.init(page);
+    defer log_likelihood.deinit(page);
 
     const deriv: []f64 = try page.alloc(f64, 3);
     defer page.free(deriv);
 
-    pseudo_voigt.preforward(_test_mode_, _test_sigma_, _test_gamma_);
+    const xvec: []f64 = try page.alloc(f64, 21);
+    defer page.free(xvec);
+
+    const wvec: []f64 = try page.alloc(f64, 21);
+    defer page.free(wvec);
+
+    for (xvec, 0..) |*p, i| p.* = @as(f64, @floatFromInt(i)) - 10.0;
+
+    inline for (.{
+        0x1.1cf5be03beea0p-8,
+        0x1.71bc643f76115p-8,
+        0x1.f657f84e55806p-8,
+        0x1.6d5ba458e6b91p-7,
+        0x1.24e2e3804fc37p-6, // 05
+        0x1.04421cccb1950p-5,
+        0x1.e14cf4fce3a26p-5,
+        0x1.9cd1e2a6d554fp-4,
+        0x1.28a1a44b3b02bp-3,
+        0x1.50c5d694e3f72p-3, // 10
+        0x1.28a1a44b3b02bp-3,
+        0x1.9cd1e2a6d554fp-4,
+        0x1.e14cf4fce3a26p-5,
+        0x1.04421cccb1950p-5,
+        0x1.24e2e3804fc37p-6, // 15
+        0x1.6d5ba458e6b91p-7,
+        0x1.f657f84e55806p-8,
+        0x1.71bc643f76115p-8,
+        0x1.1cf5be03beea0p-8,
+        0x1.c5f095d8a3491p-9, // 20
+        0x1.72b121352ac63p-9,
+    }, wvec) |v, *p| p.* = v;
+
+    var guess: [3]f64 = .{ _test_mode_, _test_sigma_, _test_gamma_ };
+
+    log_likelihood.preforward(&guess);
+    log_likelihood.backward(xvec, wvec, deriv);
+
+    std.debug.print(
+        "logL   = {d} @ (μ = {d}, σ = {d}, γ = {d})\n",
+        .{ log_likelihood.value, _test_mode_, _test_sigma_, _test_gamma_ },
+    );
+    std.debug.print(
+        "dlogL = {d} @ (μ = {d}, σ = {d}, γ = {d})\n",
+        .{ deriv, _test_mode_, _test_sigma_, _test_gamma_ },
+    );
+}
+
+const PseudoVoigt = struct {
+    value: f64, // PpV
+    deriv: f64, // d(logL)/d(PpV)
+    deriv_in: *f64, // dy/d(logL)
+    deriv_out: *f64, // dy/d(PpV)
+
+    eta: *PseudoVoigtEta,
+    gamma: *PseudoVoigtGamma, // for convenience
+
+    mode: *PseudoVoigtMode, // for convenience
+    normal: *PseudoVoigtNormal,
+    lorentz: *PseudoVoigtLorentz,
+
+    fn init(allocator: mem.Allocator, tape: []f64) !*PseudoVoigt {
+        const self = try allocator.create(PseudoVoigt);
+        errdefer allocator.destroy(self);
+
+        // = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = =
+
+        self.gamma = try PseudoVoigtGamma.init(allocator, tape);
+        errdefer self.gamma.deinit(allocator);
+
+        self.eta = try PseudoVoigtEta.init(allocator, self.gamma, tape);
+        errdefer self.eta.deinit(allocator);
+
+        // = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = =
+
+        self.mode = try PseudoVoigtMode.init(allocator, tape);
+        errdefer self.mode.deinit(allocator);
+
+        self.normal = try PseudoVoigtNormal.init(allocator, self.mode, self.gamma, tape);
+        errdefer self.normal.deinit(allocator);
+
+        self.lorentz = try PseudoVoigtLorentz.init(allocator, self.mode, self.gamma, tape);
+
+        // = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = =
+
+        self.deriv_in = &tape[0]; // dy/d(logL)
+        self.deriv_out = &tape[1]; // dy/d(PpV)
+
+        return self;
+    }
+
+    fn deinit(self: *PseudoVoigt, allocator: mem.Allocator) void {
+        self.lorentz.deinit(allocator);
+        self.normal.deinit(allocator);
+        self.mode.deinit(allocator);
+
+        self.eta.deinit(allocator);
+        self.gamma.deinit(allocator);
+
+        allocator.destroy(self);
+
+        return;
+    }
+
+    fn preforward(self: *PseudoVoigt, mu: f64, sigma: f64, gamma: f64) void {
+        self.mode.forward(mu);
+        self.gamma.forward(sigma, gamma);
+        self.normal.scale.forward();
+        self.lorentz.scale.forward();
+        self.eta.forward();
+        return;
+    }
+
+    fn forward(self: *PseudoVoigt, x: f64) void {
+        self.normal.forward(x);
+        self.lorentz.forward(x);
+
+        const arg1: f64 = self.eta.value;
+        const arg2: f64 = 1.0 - arg1;
+
+        self.value = arg1 * self.lorentz.value + arg2 * self.normal.value;
+
+        self.normal.deriv = arg2; // dPpV/dPN
+        self.lorentz.deriv = arg1; // dPpV/dPL
+        self.eta.deriv = self.lorentz.value - self.normal.value; // dPpV/dη
+
+        return;
+    }
+
+    fn backward(self: *PseudoVoigt, final_deriv_out: []f64) void {
+        if (final_deriv_out.len != 3) unreachable; // [ dy/dμ, dy/dσ, dy/dγ ]
+
+        // (dy/dPpV) = (d(logL)/dPpV) × (dy/d(logL))
+        self.deriv_out.* = self.deriv * self.deriv_in.*;
+
+        self.normal.backward();
+        self.lorentz.backward();
+        self.mode.backward(final_deriv_out);
+
+        self.eta.backward();
+        self.gamma.backward(final_deriv_out);
+
+        return;
+    }
+};
+
+test "Pseudo-Voigt Function Reverse Autodifferentiation, y = PpV" {
+    const page = testing.allocator;
+
+    const log_likelihood: *Self = try Self.init(page);
+    defer log_likelihood.deinit(page);
+
+    const deriv: []f64 = try page.alloc(f64, 3);
+    defer page.free(deriv);
+
+    log_likelihood.pseudo_voigt.preforward(_test_mode_, _test_sigma_, _test_gamma_);
 
     // Produce dy/dPpV = dy/dPpV = 1
-    pseudo_voigt.deriv = 1.0;
+    log_likelihood.pseudo_voigt.deriv = 1.0;
 
-    pseudo_voigt.forward(_test_x_);
-    pseudo_voigt.backward(deriv);
+    log_likelihood.pseudo_voigt.forward(_test_x_);
+    log_likelihood.pseudo_voigt.backward(deriv);
 
     std.debug.print(
         "PpV  = {d} @ (x = {d}, μ = {d}, σ = {d}, γ = {d})\n",
-        .{ pseudo_voigt.value, _test_x_, _test_mode_, _test_sigma_, _test_gamma_ },
+        .{ log_likelihood.pseudo_voigt.value, _test_x_, _test_mode_, _test_sigma_, _test_gamma_ },
     );
     std.debug.print(
         "dPpV = {d} @ (x = {d}, μ = {d}, σ = {d}, γ = {d})\n",
