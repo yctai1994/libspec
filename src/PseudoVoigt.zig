@@ -1,5 +1,5 @@
 //! Tape:
-//! [ dy/d(log-likelihood), dy/dPpV, dy/dPG,   dy/dPL, dy/dσV,
+//! [ dy/d(log-likelihood), dy/dPpV, dy/dPN,   dy/dPL, dy/dσV,
 //!                 dy/dγV, dy/dη,   dy/dΓtot, dy/dΓG, dy/dΓL ]
 tape: []f64,
 value: f64, // PpV
@@ -36,7 +36,7 @@ fn init(allocator: mem.Allocator) !*Self {
     self.mode = try PseudoVoigtMode.init(allocator, self.tape);
     errdefer self.mode.deinit(allocator);
 
-    self.normal = try PseudoVoigtNormal.init(allocator, self.mode, self.gamma);
+    self.normal = try PseudoVoigtNormal.init(allocator, self.mode, self.gamma, self.tape);
     errdefer self.normal.deinit(allocator);
 
     self.lorentz = try PseudoVoigtLorentz.init(allocator, self.mode, self.gamma, self.tape);
@@ -185,6 +185,11 @@ test "backward: y ≡ η" {
 // = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = =
 
 const PseudoVoigtNormal = struct {
+    value: f64 = undefined, // N( x | μ, Γ(σ, γ) )
+    deriv: f64 = undefined, // dPpV/dPN
+    deriv_in: *f64 = undefined, // dy/dPpV
+    deriv_out: *f64 = undefined, // dy/dPN
+
     mode: *PseudoVoigtMode, // handled by PseudoVoigt
     scale: *PseudoNormalScale,
 
@@ -192,12 +197,18 @@ const PseudoVoigtNormal = struct {
         allocator: mem.Allocator,
         mode: *PseudoVoigtMode,
         gamma: *PseudoVoigtGamma,
+        tape: []f64,
     ) !*PseudoVoigtNormal {
+        if (tape.len != 10) unreachable;
+
         const self = try allocator.create(PseudoVoigtNormal);
         errdefer allocator.destroy(self);
 
-        self.scale = try PseudoNormalScale.init(allocator, gamma);
+        self.scale = try PseudoNormalScale.init(allocator, gamma, tape);
         self.mode = mode;
+
+        self.deriv_in = &tape[1]; // dy/dPpV
+        self.deriv_out = &tape[2]; // dy/dPN
 
         return self;
     }
@@ -207,17 +218,56 @@ const PseudoVoigtNormal = struct {
         allocator.destroy(self);
         return;
     }
+
+    fn forward(self: *PseudoVoigtNormal, x: f64) void {
+        self.scale.forward();
+
+        const prob: f64 = PseudoVoigtNormal.density(x, self.mode.value, self.scale.value);
+        const arg1: f64 = (x - self.mode.value) / pow2(self.scale.value);
+        const arg2: f64 = self.scale.value * pow2(arg1) - 1.0 / self.scale.value;
+
+        self.value = prob;
+        self.mode.deriv[0] = prob * arg1; // [ dPN/dμ, dPL/dμ ]
+        self.scale.deriv = prob * arg2; // dPN/dσV
+
+        return;
+    }
+
+    fn backward(self: *PseudoVoigtNormal) void {
+        // (dy/dPN) = (dPpV/dPN) × (dy/dPpV)
+        self.deriv_out.* = self.deriv * self.deriv_in.*;
+        self.scale.backward();
+
+        return;
+    }
+
+    inline fn density(x: f64, mu: f64, gamma: f64) f64 {
+        const temp: comptime_float = comptime 1.0 / @sqrt(2.0 * math.pi);
+        return temp * @exp(-0.5 * pow2((x - mu) / gamma)) / gamma;
+    }
 };
 
 const PseudoNormalScale = struct {
+    value: f64 = undefined, // σV
+    deriv: f64 = undefined, // dPN/dσV
+    deriv_in: *f64 = undefined, // dy/dPN
+    deriv_out: *f64 = undefined, // dy/dσV
+
     gamma: *PseudoVoigtGamma, // handled by PseudoVoigt
 
     fn init(
         allocator: mem.Allocator,
         gamma: *PseudoVoigtGamma,
+        tape: []f64,
     ) !*PseudoNormalScale {
+        if (tape.len != 10) unreachable;
+
         const self = try allocator.create(PseudoNormalScale);
         self.gamma = gamma;
+
+        self.deriv_in = &tape[2];
+        self.deriv_out = &tape[4];
+
         return self;
     }
 
@@ -225,7 +275,52 @@ const PseudoNormalScale = struct {
         allocator.destroy(self);
         return;
     }
+
+    fn forward(self: *PseudoNormalScale) void {
+        // Gamma should be already forwarded by PseudoVoigt.
+        const temp: comptime_float = comptime 1.0 / (2.0 * @sqrt(2.0 * @log(2.0)));
+        self.gamma.deriv[0] = temp; // [ dσV/dΓtot, dγV/dΓtot, dη/dΓtot ]
+        self.value = temp * self.gamma.value;
+
+        return;
+    }
+
+    fn backward(self: *PseudoNormalScale) void {
+        // (dy/dσV) = (dPN/dσV) × (dy/dPN)
+        self.deriv_out.* = self.deriv * self.deriv_in.*;
+
+        return;
+    }
 };
+
+test "backward: y ≡ PN" {
+    const page = testing.allocator;
+
+    const pseudo_voigt: *Self = try Self.init(page);
+    defer pseudo_voigt.deinit(page);
+
+    const deriv: []f64 = try page.alloc(f64, 3);
+    defer page.free(deriv);
+
+    pseudo_voigt.forward(_test_x_, _test_mode_, _test_sigma_, _test_gamma_);
+    pseudo_voigt.normal.forward(_test_x_);
+
+    // Produce dy/dPN = dPN/dPN = 1
+    pseudo_voigt.normal.deriv = 1.0;
+
+    pseudo_voigt.normal.backward();
+    pseudo_voigt.mode.backward(deriv);
+    pseudo_voigt.gamma.backward(deriv);
+
+    std.debug.print(
+        "PN         = {d} @ ({d}, {d}, {d}, {d})\n",
+        .{ pseudo_voigt.normal.value, _test_x_, _test_mode_, _test_sigma_, _test_gamma_ },
+    );
+    std.debug.print(
+        "dPN        = {d} @ ({d}, {d}, {d}, {d})\n",
+        .{ deriv, _test_x_, _test_mode_, _test_sigma_, _test_gamma_ },
+    );
+}
 
 // = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = =
 
@@ -272,7 +367,7 @@ const PseudoVoigtLorentz = struct {
         const arg2: f64 = 2.0 * math.pi * pow2(prob);
 
         self.value = prob;
-        self.mode.deriv[1] = (x - self.mode.value) * arg2 / self.scale.value; // [ dPG/dμ, dPL/dμ ]
+        self.mode.deriv[1] = (x - self.mode.value) * arg2 / self.scale.value; // [ dPN/dμ, dPL/dμ ]
         self.scale.deriv = arg1 - arg2; // dPL/dγV
 
         return;
@@ -604,8 +699,8 @@ const LorentzFWHM = struct {
 
 const PseudoVoigtMode = struct {
     value: f64 = undefined, // μ
-    deriv: [2]f64 = undefined, // [ dPG/dμ, dPL/dμ ]
-    deriv_in: []f64 = undefined, // [ dy/dPG, dy/dPL ]
+    deriv: [2]f64 = undefined, // [ dPN/dμ, dPL/dμ ]
+    deriv_in: []f64 = undefined, // [ dy/dPN, dy/dPL ]
 
     fn init(allocator: mem.Allocator, tape: []f64) !*PseudoVoigtMode {
         if (tape.len != 10) unreachable;
@@ -631,7 +726,7 @@ const PseudoVoigtMode = struct {
         // final_deriv_out := [ dy/dμ, dy/dσ, dy/dγ ]
         if (final_deriv_out.len != 3) unreachable;
 
-        // (dy/dμ) = [ dPG/dμ, dPL/dμ ]ᵀ ⋅ [ dy/dPG, dy/dPL ]
+        // (dy/dμ) = [ dPN/dμ, dPL/dμ ]ᵀ ⋅ [ dy/dPN, dy/dPL ]
         var temp: f64 = 0.0;
         for (self.deriv, self.deriv_in) |deriv, deriv_in| temp += deriv * deriv_in;
 
