@@ -6,20 +6,23 @@ deriv_in: []f64 = undefined, // [ dy/dx̄₁, dy/dx̄₂, … ]
 const Self: type = @This();
 
 fn init(allocator: mem.Allocator, n: usize, tape: []f64) !*Self {
-    if (tape.len != 10) unreachable;
+    // if (tape.len != 10) unreachable;
 
     const self = try allocator.create(Self);
-    defer allocator.destroy(self);
+    errdefer allocator.destroy(self);
 
     self.deriv = try allocator.alloc(f64, n);
+
     @memset(self.deriv, -1.0);
 
     // self.deriv_in = tape[TBD]; // [ dy/dx̄₁, dy/dx̄₂, … ]
 
+    _ = tape;
+
     return self;
 }
 
-inline fn deinit(self: *Self, allocator: mem.Allocator) void {
+fn deinit(self: *Self, allocator: mem.Allocator) void {
     allocator.free(self.deriv);
     allocator.destroy(self);
     return;
@@ -34,10 +37,10 @@ fn backward(self: *Self, final_deriv_out: []f64) void {
     if (final_deriv_out.len != 3) unreachable; // [ dy/dμ, dy/dσ, dy/dγ ]
 
     // (dy/dμ) = [ dx̄₁/dμ, dx̄₂/dμ, … ]ᵀ ⋅ [ dy/dx̄₁, dy/dx̄₂, … ]
-    var temp: f64 = 0.0;
-    for (self.deriv, self.deriv_in) |deriv, deriv_in| temp += deriv * deriv_in;
-
-    final_deriv_out[0] = temp;
+    final_deriv_out[0] = 0.0;
+    for (self.deriv, self.deriv_in) |deriv, deriv_in| {
+        final_deriv_out[0] += deriv * deriv_in;
+    }
 
     return;
 }
