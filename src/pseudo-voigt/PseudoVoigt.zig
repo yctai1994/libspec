@@ -8,11 +8,11 @@ eta: *PseudoVoigtEta,
 normal: *PseudoVoigtNormal,
 lorentz: *PseudoVoigtLorentz,
 
-const Self: type = @This();
+const Self: type = @This(); // hosted by PseudoVoigtLogL
 
 fn init(
     allocator: mem.Allocator,
-    gamma: *PseudoVoigtGamma,
+    width: *PseudoVoigtWidth,
     cdata: *CenteredData,
     n: usize,
     tape: []f64,
@@ -30,15 +30,15 @@ fn init(
 
     // = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = =
 
-    self.eta = try PseudoVoigtEta.init(allocator, gamma, tape);
+    self.eta = try PseudoVoigtEta.init(allocator, width, tape);
     errdefer self.eta.deinit(allocator);
 
     // = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = =
 
-    self.normal = try PseudoVoigtNormal.init(allocator, gamma, cdata, n, tape);
+    self.normal = try PseudoVoigtNormal.init(allocator, width, cdata, n, tape);
     errdefer self.normal.deinit(allocator);
 
-    self.lorentz = try PseudoVoigtLorentz.init(allocator, gamma, cdata, n, tape);
+    self.lorentz = try PseudoVoigtLorentz.init(allocator, width, cdata, n, tape);
 
     // = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = =
 
@@ -65,14 +65,9 @@ fn forward(self: *Self) void {
     return;
 }
 
-fn backward(self: *Self, final_deriv_out: []f64) void {
-    if (final_deriv_out.len != 3) unreachable; // [ dy/dμ, dy/dσ, dy/dγ ]
-
+fn backward(self: *Self) void {
     // [ dy/dPv₁, dy/dPv₂, … ] = [ dlogPv₁/dPv₁, dlogPv₂/dPv₂, … ]ᵀ ⋅ [ dy/dlogPv₁, dy/dlogPv₂, … ]
-    for (self.deriv, self.deriv_in, self.deriv_out) |deriv, deriv_in, *deriv_out| {
-        deriv_out.* = deriv * deriv_in;
-    }
-
+    for (self.deriv, self.deriv_in, self.deriv_out) |d, din, *dout| dout.* = d * din;
     return;
 }
 
@@ -80,7 +75,7 @@ const std = @import("std");
 const mem = std.mem;
 
 const CenteredData = @import("./CenteredData.zig");
-const PseudoVoigtGamma = @import("./PseudoVoigtGamma.zig");
+const PseudoVoigtWidth = @import("./PseudoVoigtWidth.zig");
 const PseudoVoigtEta = @import("./PseudoVoigtEta.zig");
 const PseudoVoigtNormal = @import("./PseudoVoigtNormal.zig");
 const PseudoVoigtLorentz = @import("./PseudoVoigtLorentz.zig");

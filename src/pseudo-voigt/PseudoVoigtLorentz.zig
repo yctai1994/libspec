@@ -4,14 +4,15 @@ deriv: []f64 = undefined, // [ dPv₁/dPL₁, dPv₂/dPL₂, … ]
 deriv_in: []f64 = undefined, // [ dy/dPv₁, dy/dPv₂, … ]
 deriv_out: []f64 = undefined, // [ dy/dPL₁, dy/dPL₂, … ]
 
-cdata: *CenteredData, // handled by PseudoVoigt
+cdata: *CenteredData, // hosted by PseudoVoigtLogL
 scale: *PseudoLorentzScale,
 
-const Self: type = @This();
+const Self: type = @This(); // hosted by PseudoVoigt
 
+// Called by PseudoVoigt
 fn init(
     allocator: mem.Allocator,
-    gamma: *PseudoVoigtGamma,
+    width: *PseudoVoigtWidth,
     cdata: *CenteredData,
     n: usize,
     tape: []f64,
@@ -27,7 +28,7 @@ fn init(
     self.deriv = try allocator.alloc(f64, n);
     errdefer allocator.free(self.deriv);
 
-    self.scale = try PseudoLorentzScale.init(allocator, gamma, tape);
+    self.scale = try PseudoLorentzScale.init(allocator, width, tape);
     self.cdata = cdata;
 
     // self.deriv_in = tape[TBD]; // [ dy/dPv₁, dy/dPv₂, … ]
@@ -36,6 +37,7 @@ fn init(
     return self;
 }
 
+// Called by PseudoVoigt
 fn deinit(self: *Self, allocator: mem.Allocator) void {
     self.scale.deinit(allocator);
     allocator.free(self.deriv);
@@ -44,35 +46,41 @@ fn deinit(self: *Self, allocator: mem.Allocator) void {
     return;
 }
 
+// Called by PseudoVoigt
 fn forward(self: *Self) void {
-    for (self.value, self.cdata.value) |*prob, data| {
-        prob.* = density(data, self.scale.value);
+    for (self.value, self.cdata.value) |*prob, centered_x| {
+        prob.* = density(centered_x, self.scale.value);
     }
 
-    // const arg1: f64 = (x - self.mode.value) / pow2(self.scale.value);
-    // const arg2: f64 = self.scale.value * pow2(arg1) - 1.0 / self.scale.value;
+    const n: usize = self.value.len;
+    const neg_twopi: comptime_float = comptime -2.0 * math.pi;
+    const inv_width: f64 = 1.0 / self.scale.value;
+    var temp: f64 = undefined;
 
-    // self.value = prob;
-    // self.mode.deriv[0] = prob * arg1; // [ dPN/dμ, dPL/dμ ]
-    // self.scale.deriv = prob * arg2; // dPN/dσV
+    for (
+        self.value,
+        self.cdata.value,
+        self.scale.deriv,
+        self.cdata.deriv[n..],
+    ) |prob, centered_x, *dwidth, *dcentered_x| {
+        temp = neg_twopi * pow2(prob);
+        dwidth.* = inv_width * prob - temp; // dPLᵢ/dγᵥ
+        dcentered_x.* = inv_width * centered_x * temp; // dPLᵢ/dx̄ᵢ
+    }
 
     return;
 }
 
-fn backward(self: *Self, final_deriv_out: []f64) void {
+// Called by PseudoVoigt
+fn backward(self: *Self) void {
     // [ dy/dPL₁, dy/dPL₂, … ] = [ dPv₁/dPL₁, dPv₂/dPL₂, … ]ᵀ ⋅ [ dy/dPv₁, dy/dPv₂, … ]
-    for (self.deriv, self.deriv_in, self.deriv_out) |deriv, deriv_in, *deriv_out| {
-        deriv_out.* = deriv * deriv_in;
-    }
-
-    _ = final_deriv_out;
-
+    for (self.deriv, self.deriv_in, self.deriv_out) |d, din, *dout| dout.* = d * din;
     return;
 }
 
-inline fn density(x: f64, gamma: f64) f64 {
+inline fn density(centered_x: f64, width: f64) f64 {
     const temp: comptime_float = comptime 1.0 / math.pi;
-    return temp / (gamma * (1.0 + pow2(x / gamma)));
+    return temp / (width * (1.0 + pow2(centered_x / width)));
 }
 
 fn pow2(x: f64) f64 {
@@ -84,5 +92,5 @@ const mem = std.mem;
 const math = std.math;
 
 const CenteredData = @import("./CenteredData.zig");
-const PseudoVoigtGamma = @import("./PseudoVoigtGamma.zig");
+const PseudoVoigtWidth = @import("./PseudoVoigtWidth.zig");
 const PseudoLorentzScale = @import("./PseudoLorentzScale.zig");
