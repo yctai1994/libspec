@@ -8,16 +8,14 @@ scale: *NormalScale,
 
 const Self: type = @This(); // hosted by PseudoVoigtWidth
 
-pub fn init(allocator: mem.Allocator, tape: []f64) !*Self {
-    // if (tape.len != 10) unreachable;
-
+pub fn init(allocator: mem.Allocator, tape: []f64, n: usize) !*Self {
     const self = try allocator.create(Self);
     errdefer allocator.destroy(self);
 
-    self.scale = try NormalScale.init(allocator, tape);
+    self.scale = try NormalScale.init(allocator, tape, n);
 
-    // self.deriv_in = &tape[TBD]; // dy/dFᵥ
-    // self.deriv_out = &tape[TBD]; // dy/dFN
+    self.deriv_in = &tape[4 * n + 3]; // dy/dFᵥ
+    self.deriv_out = &tape[4 * n + 4]; // dy/dFN
 
     return self;
 }
@@ -47,11 +45,30 @@ fn backward(self: *Self, final_deriv_out: []f64) void {
     return;
 }
 
-test "init" {
+test "NormalWidth: forward & backward" {
     const page = testing.allocator;
-    const self = try Self.init(page, &.{});
+
+    const tape: []f64 = try page.alloc(f64, 4 * test_n + 6);
+    defer page.free(tape);
+
+    @memset(tape, 1.0);
+
+    const self = try Self.init(page, tape, test_n);
     defer self.deinit(page);
+
+    const dest: []f64 = try page.alloc(f64, 3);
+    defer page.free(dest);
+
+    self.forward(test_sigma);
+    self.deriv = 1.0; // only need for unit-testing
+    self.backward(dest);
+
+    try testing.expectEqual(0x1.473028646a507p2, self.value);
+    try testing.expectEqual(0x1.2d6abe44afc43p1, dest[1]);
 }
+
+const test_n: comptime_int = 0;
+const test_sigma: comptime_float = 2.171;
 
 const std = @import("std");
 const mem = std.mem;
