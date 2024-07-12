@@ -1,8 +1,8 @@
 //! Normal Distribution Full Width at Half Maximum (FWHM)
-value: f64 = undefined, // FN
-deriv: f64 = undefined, // dFᵥ/dFN
-deriv_in: *f64 = undefined, // dy/dFᵥ
-deriv_out: *f64 = undefined, // dy/dFN
+value: f64, // FN
+deriv: f64, // dFᵥ/dFN
+deriv_in: *f64, // dy/dFᵥ
+deriv_out: *f64, // dy/dFN
 
 scale: *NormalScale,
 
@@ -14,8 +14,9 @@ pub fn init(allocator: mem.Allocator, tape: []f64, n: usize) !*Self {
 
     self.scale = try NormalScale.init(allocator, tape, n);
 
-    self.deriv_in = &tape[4 * n + 3]; // dy/dFᵥ
-    self.deriv_out = &tape[4 * n + 4]; // dy/dFN
+    const m: usize = 4 * n;
+    self.deriv_in = &tape[m + 3]; // dy/dFᵥ
+    self.deriv_out = &tape[m + 4]; // dy/dFN
 
     return self;
 }
@@ -23,18 +24,16 @@ pub fn init(allocator: mem.Allocator, tape: []f64, n: usize) !*Self {
 pub fn deinit(self: *Self, allocator: mem.Allocator) void {
     self.scale.deinit(allocator);
     allocator.destroy(self);
-    return;
 }
 
-fn forward(self: *Self, scale: f64) void {
+pub fn forward(self: *Self, scale: f64) void {
     const temp: comptime_float = comptime 2.0 * @sqrt(2.0 * @log(2.0));
     self.scale.forward(scale);
     self.scale.deriv = temp; // dFN/dσ
     self.value = temp * scale;
-    return;
 }
 
-fn backward(self: *Self, final_deriv_out: []f64) void {
+pub fn backward(self: *Self, final_deriv_out: []f64) void {
     // dy/dFN = (dFᵥ/dFN) × (dy/dFᵥ)
     self.deriv_out.* = self.deriv * self.deriv_in.*;
     return self.scale.backward(final_deriv_out);

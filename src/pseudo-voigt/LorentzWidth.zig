@@ -1,8 +1,8 @@
 //! Lorentz Distribution Full Width at Half Maximum (FWHM)
-value: f64 = undefined, // FL
-deriv: f64 = undefined, // dFᵥ/dFL
-deriv_in: *f64 = undefined, // dy/dFᵥ
-deriv_out: *f64 = undefined, // dy/dFL
+value: f64, // FL
+deriv: [2]f64, // [ dη/dFL, dFᵥ/dFL ]
+deriv_in: []f64, // [ dy/dη, dy/dFᵥ ]
+deriv_out: *f64, // dy/dFL
 
 scale: *LorentzScale,
 
@@ -14,8 +14,9 @@ pub fn init(allocator: mem.Allocator, tape: []f64, n: usize) !*Self {
 
     self.scale = try LorentzScale.init(allocator, tape, n);
 
-    self.deriv_in = &tape[4 * n + 3]; // dy/dFᵥ
-    self.deriv_out = &tape[4 * n + 5]; // dy/dFL
+    const m: usize = 4 * n;
+    self.deriv_in = tape[m + 2 .. m + 4]; // [ dy/dη, dy/dFᵥ ]
+    self.deriv_out = &tape[m + 5]; // dy/dFL
 
     return self;
 }
@@ -23,19 +24,19 @@ pub fn init(allocator: mem.Allocator, tape: []f64, n: usize) !*Self {
 pub fn deinit(self: *Self, allocator: mem.Allocator) void {
     self.scale.deinit(allocator);
     allocator.destroy(self);
-    return;
 }
 
-fn forward(self: *Self, scale: f64) void {
+pub fn forward(self: *Self, scale: f64) void {
     self.scale.forward(scale);
     self.scale.deriv = 2.0; // dFL/dγ
     self.value = 2.0 * scale;
-    return;
 }
 
-fn backward(self: *Self, final_deriv_out: []f64) void {
+pub fn backward(self: *Self, final_deriv_out: []f64) void {
     // dy/dFL = (dFᵥ/dFL) × (dy/dFᵥ)
-    self.deriv_out.* = self.deriv * self.deriv_in.*;
+    var temp: f64 = 0.0;
+    for (self.deriv, self.deriv_in) |deriv, deriv_in| temp += deriv * deriv_in;
+    self.deriv_out.* = temp;
     return self.scale.backward(final_deriv_out);
 }
 
@@ -54,7 +55,8 @@ test "LorentzWidth: forward & backward" {
     defer page.free(dest);
 
     self.forward(test_gamma);
-    self.deriv = 1.0; // only need for unit-testing
+    self.deriv[0] = 0.0; // dη/dFL, only need for unit-testing
+    self.deriv[1] = 1.0; // dFᵥ/dFL, only need for unit-testing
     self.backward(dest);
 
     try testing.expectEqual(0x1.4e147ae147ae1p1, self.value);
