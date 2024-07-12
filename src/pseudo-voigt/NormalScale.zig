@@ -30,11 +30,11 @@ test "init" {
     const tape: []f64 = try page.alloc(f64, 4 * test_n + 6);
     defer page.free(tape);
 
-    const self = try Self.init(page, tape, test_n);
+    const self: *Self = try Self.init(page, tape, test_n);
     defer self.deinit(page);
 }
 
-const test_n: comptime_int = 0;
+const test_n: comptime_int = 1;
 
 const std = @import("std");
 const mem = std.mem;

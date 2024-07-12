@@ -16,7 +16,7 @@ const WIDTH_FAC3: comptime_float = 2.42843;
 const WIDTH_FAC4: comptime_float = 2.69269;
 const WIDTH_FAC5: comptime_float = 1.0;
 
-fn init(allocator: mem.Allocator, tape: []f64, n: usize) !*Self {
+pub fn init(allocator: mem.Allocator, tape: []f64, n: usize) !*Self {
     const self = try allocator.create(Self);
     errdefer allocator.destroy(self);
 
@@ -32,13 +32,13 @@ fn init(allocator: mem.Allocator, tape: []f64, n: usize) !*Self {
     return self;
 }
 
-fn deinit(self: *Self, allocator: mem.Allocator) void {
+pub fn deinit(self: *Self, allocator: mem.Allocator) void {
     self.lorentz.deinit(allocator);
     self.normal.deinit(allocator);
     allocator.destroy(self);
 }
 
-fn forward(self: *Self, sigma: f64, gamma: f64) void {
+pub fn forward(self: *Self, sigma: f64, gamma: f64) void {
     self.normal.forward(sigma);
     self.lorentz.forward(gamma);
 
@@ -100,7 +100,7 @@ fn forward(self: *Self, sigma: f64, gamma: f64) void {
     self.lorentz.deriv[1] = temp * lorentz_partial; // [ dη/dFL, dFᵥ/dFL ]
 }
 
-fn backward(self: *Self, final_deriv_out: []f64) void {
+pub fn backward(self: *Self, final_deriv_out: []f64) void {
     // (dy/dFᵥ) = [ dσᵥ/dFᵥ, dγᵥ/dFᵥ, dη/dFᵥ ]ᵀ⋅[ dy/dσᵥ, dy/dγᵥ, dy/dη ]
     var temp: f64 = 0.0;
     for (self.deriv, self.deriv_in) |deriv, deriv_in| {
@@ -120,7 +120,7 @@ test "PseudoVoigtWidth: forward & backward" {
 
     @memset(tape, 1.0);
 
-    const self = try Self.init(page, tape, test_n);
+    const self: *Self = try Self.init(page, tape, test_n);
     defer self.deinit(page);
 
     const dest: []f64 = try page.alloc(f64, 3);
@@ -135,7 +135,7 @@ test "PseudoVoigtWidth: forward & backward" {
     try testing.expectApproxEqRel(0x1.4978fceff8e7ap0, dest[2], 1e-15);
 }
 
-const test_n: comptime_int = 0;
+const test_n: comptime_int = 1;
 const test_sigma: comptime_float = 2.171;
 const test_gamma: comptime_float = 1.305;
 

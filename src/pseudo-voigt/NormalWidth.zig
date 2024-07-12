@@ -47,7 +47,7 @@ test "NormalWidth: forward & backward" {
 
     @memset(tape, 1.0);
 
-    const self = try Self.init(page, tape, test_n);
+    const self: *Self = try Self.init(page, tape, test_n);
     defer self.deinit(page);
 
     const dest: []f64 = try page.alloc(f64, 3);
@@ -61,7 +61,7 @@ test "NormalWidth: forward & backward" {
     try testing.expectEqual(0x1.2d6abe44afc43p1, dest[1]);
 }
 
-const test_n: comptime_int = 0;
+const test_n: comptime_int = 1;
 const test_sigma: comptime_float = 2.171;
 
 const std = @import("std");

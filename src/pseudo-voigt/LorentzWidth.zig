@@ -33,7 +33,7 @@ pub fn forward(self: *Self, scale: f64) void {
 }
 
 pub fn backward(self: *Self, final_deriv_out: []f64) void {
-    // dy/dFL = (dFᵥ/dFL) × (dy/dFᵥ)
+    // (dy/dFL) = [ dη/dFL, dFᵥ/dFL ]ᵀ⋅[ dy/dη, dy/dFᵥ ]
     var temp: f64 = 0.0;
     for (self.deriv, self.deriv_in) |deriv, deriv_in| temp += deriv * deriv_in;
     self.deriv_out.* = temp;
@@ -48,7 +48,7 @@ test "LorentzWidth: forward & backward" {
 
     @memset(tape, 1.0);
 
-    const self = try Self.init(page, tape, test_n);
+    const self: *Self = try Self.init(page, tape, test_n);
     defer self.deinit(page);
 
     const dest: []f64 = try page.alloc(f64, 3);
@@ -63,7 +63,7 @@ test "LorentzWidth: forward & backward" {
     try testing.expectEqual(0x1.0000000000000p1, dest[2]);
 }
 
-const test_n: comptime_int = 0;
+const test_n: comptime_int = 1;
 const test_gamma: comptime_float = 1.305;
 
 const std = @import("std");
