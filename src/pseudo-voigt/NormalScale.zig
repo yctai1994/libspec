@@ -7,9 +7,7 @@ const Self: type = @This(); // hosted by NormalWidth
 
 pub fn init(allocator: mem.Allocator, tape: []f64, n: usize) !*Self {
     const self = try allocator.create(Self);
-
     self.deriv_in = &tape[4 * n + 4]; // dy/dFN
-
     return self;
 }
 

@@ -35,14 +35,9 @@ fn forward(self: *Self, scale: f64) void {
 }
 
 fn backward(self: *Self, final_deriv_out: []f64) void {
-    if (final_deriv_out.len != 3) unreachable; // [ dy/dμ, dy/dσ, dy/dγ ]
-
     // dy/dFN = (dFᵥ/dFN) × (dy/dFᵥ)
     self.deriv_out.* = self.deriv * self.deriv_in.*;
-
-    self.scale.backward(final_deriv_out);
-
-    return;
+    return self.scale.backward(final_deriv_out);
 }
 
 test "NormalWidth: forward & backward" {
