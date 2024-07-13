@@ -6,14 +6,14 @@ deriv_in: []f64, // [ dy/dx̄₁, dy/dx̄₂, … ]
 
 const Self: type = @This(); // hosted by CenteredData
 
-pub fn init(allocator: mem.Allocator, tape: []f64) !*Self {
+pub fn init(allocator: mem.Allocator, tape: []f64, n: usize) !*Self {
     // if (tape.len != 10) unreachable;
 
     const self = try allocator.create(Self);
 
     // self.deriv_in = tape[TBD]; // [ dy/dx̄₁, dy/dx̄₂, … ]
 
-    _ = tape;
+    _ = .{ tape, n };
 
     return self;
 }
@@ -24,13 +24,13 @@ pub inline fn deinit(self: *Self, allocator: mem.Allocator) void {
 }
 
 // Called by CenteredData
-inline fn forward(self: *Self, mode: f64) void {
+pub inline fn forward(self: *Self, mode: f64) void {
     self.value = mode;
     return;
 }
 
 // Called by CenteredData
-fn backward(self: *Self, final_deriv_out: []f64) void {
+pub fn backward(self: *Self, final_deriv_out: []f64) void {
     if (final_deriv_out.len != 3) unreachable; // [ dy/dμ, dy/dσ, dy/dγ ]
 
     // (dy/dμ) = [ dx̄₁/dμ, dx̄₂/dμ, … ]ᵀ⋅[ dy/dx̄₁, dy/dx̄₂, … ], dx̄₁/dμ = dx̄₂/dμ = … = -1
@@ -41,7 +41,7 @@ fn backward(self: *Self, final_deriv_out: []f64) void {
 
 test "init" {
     const page = testing.allocator;
-    const self = try Self.init(page, &.{});
+    const self = try Self.init(page, &.{}, 0);
     defer self.deinit(page);
 }
 

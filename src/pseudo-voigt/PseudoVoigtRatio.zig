@@ -56,7 +56,7 @@ fn forward(self: *Self) void {
 fn backward(self: *Self) void {
     // (dy/dη) = [ dPv₁/dη, dPv₂/dη, … ]ᵀ⋅[ dy/dPv₁, dy/dPv₂, … ]
     var temp: f64 = 0.0;
-    for (self.deriv, self.deriv_in) |deriv, deriv_in| temp += deriv * deriv_in;
+    for (self.deriv, self.deriv_in) |d, din| temp += d * din;
     self.deriv_out.* = temp;
 }
 
@@ -77,18 +77,18 @@ test "PseudoVoigtRatio: forward & backward" {
     const dest: []f64 = try page.alloc(f64, 3);
     defer page.free(dest);
 
-    width.forward(test_sigma, test_gamma);
     @memset(&width.deriv, 0.0); // only need for unit-testing
+    width.forward(test_sigma, test_gamma);
 
-    self.forward();
     @memset(self.deriv, 1.0); // only need for unit-testing
+    self.forward();
 
     self.backward();
     width.backward(dest);
 
-    try testing.expectApproxEqRel(0x1.e279811e1afa5p-2, self.value, 1e-15);
+    try testing.expectApproxEqRel(0x1.e279811e1afa5p-2, self.value, 2e-16);
     try testing.expectApproxEqRel(-0x1.2118a9da8538ep-3, dest[1], 1e-15);
-    try testing.expectApproxEqRel(0x1.e0f0ed0ebe3dfp-3, dest[2], 1e-15);
+    try testing.expectApproxEqRel(0x1.e0f0ed0ebe3dfp-3, dest[2], 4e-16);
 }
 
 const test_n: comptime_int = 1;

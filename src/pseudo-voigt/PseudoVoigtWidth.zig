@@ -103,9 +103,7 @@ pub fn forward(self: *Self, sigma: f64, gamma: f64) void {
 pub fn backward(self: *Self, final_deriv_out: []f64) void {
     // (dy/dFᵥ) = [ dσᵥ/dFᵥ, dγᵥ/dFᵥ, dη/dFᵥ ]ᵀ⋅[ dy/dσᵥ, dy/dγᵥ, dy/dη ]
     var temp: f64 = 0.0;
-    for (self.deriv, self.deriv_in) |deriv, deriv_in| {
-        temp += deriv * deriv_in;
-    }
+    for (self.deriv, self.deriv_in) |deriv, deriv_in| temp += deriv * deriv_in;
     self.deriv_out.* = temp;
 
     self.normal.backward(final_deriv_out);
@@ -130,9 +128,9 @@ test "PseudoVoigtWidth: forward & backward" {
     @memset(&self.deriv, 0x1.5555555555555p-2); // only need for unit-testing
     self.backward(dest);
 
-    try testing.expectApproxEqRel(0x1.a7b914f93252cp2, self.value, 1e-15);
-    try testing.expectApproxEqRel(0x1.235305ea3571bp1, dest[1], 1e-15);
-    try testing.expectApproxEqRel(0x1.4978fceff8e7ap0, dest[2], 1e-15);
+    try testing.expectApproxEqRel(0x1.a7b914f93252cp2, self.value, 3e-16);
+    try testing.expectApproxEqRel(0x1.235305ea3571bp1, dest[1], 4e-16);
+    try testing.expectApproxEqRel(0x1.4978fceff8e7ap0, dest[2], 7e-16);
 }
 
 const test_n: comptime_int = 1;

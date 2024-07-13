@@ -8,7 +8,7 @@ mode: *PseudoVoigtMode,
 
 const Self: type = @This(); // hosted by PseudoVoigtLogL
 
-fn init(allocator: mem.Allocator, n: usize, tape: []f64) !*Self {
+pub fn init(allocator: mem.Allocator, tape: []f64, n: usize) !*Self {
     // if (tape.len != 10) unreachable;
 
     const self = try allocator.create(Self);
@@ -20,7 +20,7 @@ fn init(allocator: mem.Allocator, n: usize, tape: []f64) !*Self {
     self.deriv = try allocator.alloc(f64, 2 * n);
     errdefer allocator.free(self.deriv);
 
-    self.mode = try PseudoVoigtMode.init(allocator, tape);
+    self.mode = try PseudoVoigtMode.init(allocator, tape, n);
 
     // self.deriv_in = tape[TBD]; // [ dy/dPN₁, dy/dPN₂, …, dy/dPL₁, dy/dPL₂, … ]
     // self.deriv_out = tape[TBD]; // [ dy/dx̄₁, dy/dx̄₂, … ]
@@ -28,7 +28,7 @@ fn init(allocator: mem.Allocator, n: usize, tape: []f64) !*Self {
     return self;
 }
 
-fn deinit(self: *Self, allocator: mem.Allocator) void {
+pub fn deinit(self: *Self, allocator: mem.Allocator) void {
     self.mode.deinit(allocator);
     allocator.free(self.deriv);
     allocator.free(self.value);
@@ -37,14 +37,14 @@ fn deinit(self: *Self, allocator: mem.Allocator) void {
 }
 
 // Called by PseudoVoigtLogL
-fn forward(self: *Self, xvec: f64, mode: f64) void {
+pub fn forward(self: *Self, xvec: []f64, mode: f64) void {
     self.mode.forward(mode);
     for (self.value, xvec) |*cdat, data| cdat.* = data - mode;
     return;
 }
 
 // Called by PseudoVoigtLogL
-fn backward(self: *Self, final_deriv_out: []f64) void {
+pub fn backward(self: *Self, final_deriv_out: []f64) void {
     const n: usize = self.value.len;
 
     // [ dy/dx̄₁, dy/dx̄₂, … ] = [ dPN₁/dx̄₁, dPN₂/dx̄₂, … ]ᵀ ⋅ [ dy/dPN₁, dy/dPN₂, … ]
@@ -60,7 +60,7 @@ fn backward(self: *Self, final_deriv_out: []f64) void {
 
 test "init" {
     const page = testing.allocator;
-    const self = try Self.init(page, 10, &.{});
+    const self = try Self.init(page, &.{}, 10);
     defer self.deinit(page);
 }
 
