@@ -10,7 +10,7 @@ scale: *PseudoLorentzScale,
 const Self: type = @This(); // hosted by PseudoVoigt
 
 // Called by PseudoVoigt
-fn init(allocator: mem.Allocator, cdata: *CenteredData, width: *PseudoVoigtWidth, tape: []f64, n: usize) !*Self {
+pub fn init(allocator: mem.Allocator, cdata: *CenteredData, width: *PseudoVoigtWidth, tape: []f64, n: usize) !*Self {
     const m: usize = 2 * n;
     if (tape.len != (m <<| 1) + n + 6) unreachable;
 
@@ -33,7 +33,7 @@ fn init(allocator: mem.Allocator, cdata: *CenteredData, width: *PseudoVoigtWidth
 }
 
 // Called by PseudoVoigt
-fn deinit(self: *Self, allocator: mem.Allocator) void {
+pub fn deinit(self: *Self, allocator: mem.Allocator) void {
     self.scale.deinit(allocator);
     allocator.free(self.deriv);
     allocator.free(self.value);
@@ -42,7 +42,7 @@ fn deinit(self: *Self, allocator: mem.Allocator) void {
 }
 
 // Called by PseudoVoigt
-fn forward(self: *Self) void {
+pub fn forward(self: *Self) void {
     self.scale.forward();
 
     for (self.value, self.cdata.value) |*prob, centered_x| {
@@ -64,7 +64,7 @@ fn forward(self: *Self) void {
 }
 
 // Called by PseudoVoigt
-fn backward(self: *Self) void {
+pub fn backward(self: *Self) void {
     // [ dy/dPL₁, dy/dPL₂, … ] = [ dPv₁/dPL₁, dPv₂/dPL₂, … ]ᵀ ⋅ [ dy/dPv₁, dy/dPv₂, … ]
     for (self.deriv_out, self.deriv, self.deriv_in) |*dout, d, din| dout.* = d * din;
     return self.scale.backward();

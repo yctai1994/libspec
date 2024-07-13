@@ -14,7 +14,8 @@ const RATIO_FAC1: comptime_float = 1.36603; // η₁
 const RATIO_FAC2: comptime_float = -0.47719; // η₂
 const RATIO_FAC3: comptime_float = 0.11116; // η₃
 
-fn init(allocator: mem.Allocator, width: *PseudoVoigtWidth, tape: []f64, n: usize) !*Self {
+// Called by PseudoVoigt
+pub fn init(allocator: mem.Allocator, width: *PseudoVoigtWidth, tape: []f64, n: usize) !*Self {
     const m: usize = 5 * n;
     if (tape.len != m + 6) unreachable;
 
@@ -32,12 +33,15 @@ fn init(allocator: mem.Allocator, width: *PseudoVoigtWidth, tape: []f64, n: usiz
     return self;
 }
 
-fn deinit(self: *Self, allocator: mem.Allocator) void {
+// Called by PseudoVoigt
+pub fn deinit(self: *Self, allocator: mem.Allocator) void {
     allocator.free(self.deriv);
     allocator.destroy(self);
 }
 
-fn forward(self: *Self) void {
+// Called by PseudoVoigt
+pub fn forward(self: *Self) void {
+    // PseudoVoigtWidth should be already forwarded.
     const alpha: f64 = self.lorentz.value / self.width.value; // α = FL/Fᵥ
 
     var eta: f64 = RATIO_FAC3; // η = η₀ + η₁α + η₂α² + η₃α³
@@ -56,7 +60,8 @@ fn forward(self: *Self) void {
     self.lorentz.deriv[0] = beta; // [ dη/dFL, dFᵥ/dFL ]
 }
 
-fn backward(self: *Self) void {
+// Called by PseudoVoigt
+pub fn backward(self: *Self) void {
     // (dy/dη) = [ dPv₁/dη, dPv₂/dη, … ]ᵀ⋅[ dy/dPv₁, dy/dPv₂, … ]
     var temp: f64 = 0.0;
     for (self.deriv, self.deriv_in) |d, din| temp += d * din;
