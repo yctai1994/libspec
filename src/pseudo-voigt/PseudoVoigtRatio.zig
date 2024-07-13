@@ -14,7 +14,6 @@ const RATIO_FAC1: comptime_float = 1.36603; // η₁
 const RATIO_FAC2: comptime_float = -0.47719; // η₂
 const RATIO_FAC3: comptime_float = 0.11116; // η₃
 
-// Called by PseudoVoigt
 pub fn init(allocator: mem.Allocator, width: *PseudoVoigtWidth, tape: []f64, n: usize) !*Self {
     const m: usize = 5 * n;
     if (tape.len != m + 6) unreachable;
@@ -33,13 +32,11 @@ pub fn init(allocator: mem.Allocator, width: *PseudoVoigtWidth, tape: []f64, n: 
     return self;
 }
 
-// Called by PseudoVoigt
 pub fn deinit(self: *Self, allocator: mem.Allocator) void {
     allocator.free(self.deriv);
     allocator.destroy(self);
 }
 
-// Called by PseudoVoigt
 pub fn forward(self: *Self) void {
     // PseudoVoigtWidth should be already forwarded.
     const alpha: f64 = self.lorentz.value / self.width.value; // α = FL/Fᵥ
@@ -60,7 +57,6 @@ pub fn forward(self: *Self) void {
     self.lorentz.deriv[0] = beta; // [ dη/dFL, dFᵥ/dFL ]
 }
 
-// Called by PseudoVoigt
 pub fn backward(self: *Self) void {
     // (dy/dη) = [ dPv₁/dη, dPv₂/dη, … ]ᵀ⋅[ dy/dPv₁, dy/dPv₂, … ]
     var temp: f64 = 0.0;

@@ -1,8 +1,8 @@
 //! Pseudo-Voigt Function
-value: []f64 = undefined, // [ Pv₁, Pv₂, … ]
-deriv: []f64 = undefined, // [ dlogPv₁/dPv₁, dlogPv₂/dPv₂, … ]
-deriv_in: []f64 = undefined, // [ dy/dlogPv₁, dy/dlogPv₂, … ]
-deriv_out: []f64 = undefined, // [ dy/dPv₁, dy/dPv₂, … ]
+value: []f64, // [ Pv₁, Pv₂, … ]
+deriv: []f64, // [ dlogPv₁/dPv₁, dlogPv₂/dPv₂, … ]
+deriv_in: []f64, // [ dy/dlogPv₁, dy/dlogPv₂, … ]
+deriv_out: []f64, // [ dy/dPv₁, dy/dPv₂, … ]
 
 ratio: *PseudoVoigtRatio,
 normal: *PseudoVoigtNormal,
@@ -10,7 +10,7 @@ lorentz: *PseudoVoigtLorentz,
 
 const Self: type = @This(); // hosted by PseudoVoigtLogL
 
-fn init(allocator: mem.Allocator, cdata: *CenteredData, width: *PseudoVoigtWidth, tape: []f64, n: usize) !*Self {
+pub fn init(allocator: mem.Allocator, cdata: *CenteredData, width: *PseudoVoigtWidth, tape: []f64, n: usize) !*Self {
     if (tape.len != 5 * n + 6) unreachable;
 
     const self = try allocator.create(Self);
@@ -42,7 +42,7 @@ fn init(allocator: mem.Allocator, cdata: *CenteredData, width: *PseudoVoigtWidth
     return self;
 }
 
-fn deinit(self: *Self, allocator: mem.Allocator) void {
+pub fn deinit(self: *Self, allocator: mem.Allocator) void {
     self.lorentz.deinit(allocator);
     self.normal.deinit(allocator);
     self.ratio.deinit(allocator);
@@ -52,7 +52,7 @@ fn deinit(self: *Self, allocator: mem.Allocator) void {
     allocator.destroy(self);
 }
 
-fn forward(self: *Self) void {
+pub fn forward(self: *Self) void {
     // PseudoVoigtWidth should be already forwarded.
     self.ratio.forward();
     self.normal.forward();
@@ -74,7 +74,7 @@ fn forward(self: *Self) void {
     }
 }
 
-fn backward(self: *Self) void {
+pub fn backward(self: *Self) void {
     // [ dy/dPv₁, dy/dPv₂, … ] = [ dlogPv₁/dPv₁, dlogPv₂/dPv₂, … ]ᵀ ⋅ [ dy/dlogPv₁, dy/dlogPv₂, … ]
     for (self.deriv_out, self.deriv, self.deriv_in) |*dout, d, din| dout.* = d * din;
 

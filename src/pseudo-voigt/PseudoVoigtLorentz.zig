@@ -1,15 +1,14 @@
 // Pseudo-Voigt Lorentz
-value: []f64 = undefined, // [ L(x̄₁, γᵥ), L(x̄₂, γᵥ), … ]
-deriv: []f64 = undefined, // [ dPv₁/dPL₁, dPv₂/dPL₂, … ]
-deriv_in: []f64 = undefined, // [ dy/dPv₁, dy/dPv₂, … ]
-deriv_out: []f64 = undefined, // [ dy/dPL₁, dy/dPL₂, … ]
+value: []f64, // [ L(x̄₁, γᵥ), L(x̄₂, γᵥ), … ]
+deriv: []f64, // [ dPv₁/dPL₁, dPv₂/dPL₂, … ]
+deriv_in: []f64, // [ dy/dPv₁, dy/dPv₂, … ]
+deriv_out: []f64, // [ dy/dPL₁, dy/dPL₂, … ]
 
 cdata: *CenteredData, // hosted by PseudoVoigtLogL
 scale: *PseudoLorentzScale,
 
 const Self: type = @This(); // hosted by PseudoVoigt
 
-// Called by PseudoVoigt
 pub fn init(allocator: mem.Allocator, cdata: *CenteredData, width: *PseudoVoigtWidth, tape: []f64, n: usize) !*Self {
     const m: usize = 2 * n;
     if (tape.len != (m <<| 1) + n + 6) unreachable;
@@ -32,7 +31,6 @@ pub fn init(allocator: mem.Allocator, cdata: *CenteredData, width: *PseudoVoigtW
     return self;
 }
 
-// Called by PseudoVoigt
 pub fn deinit(self: *Self, allocator: mem.Allocator) void {
     self.scale.deinit(allocator);
     allocator.free(self.deriv);
@@ -41,7 +39,6 @@ pub fn deinit(self: *Self, allocator: mem.Allocator) void {
     return;
 }
 
-// Called by PseudoVoigt
 pub fn forward(self: *Self) void {
     self.scale.forward();
 
@@ -63,7 +60,6 @@ pub fn forward(self: *Self) void {
     return;
 }
 
-// Called by PseudoVoigt
 pub fn backward(self: *Self) void {
     // [ dy/dPL₁, dy/dPL₂, … ] = [ dPv₁/dPL₁, dPv₂/dPL₂, … ]ᵀ ⋅ [ dy/dPv₁, dy/dPv₂, … ]
     for (self.deriv_out, self.deriv, self.deriv_in) |*dout, d, din| dout.* = d * din;

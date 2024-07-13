@@ -1,8 +1,8 @@
 //! Pseudo-Voigt Lorentz Scale
-value: f64 = undefined, // γᵥ
-deriv: []f64 = undefined, // [ dPL₁/dγᵥ, dPL₂/dγᵥ, … ]
-deriv_in: []f64 = undefined, // [ dy/dPL₁, dy/dPL₂, … ]
-deriv_out: *f64 = undefined, // dy/dγᵥ
+value: f64, // γᵥ
+deriv: []f64, // [ dPL₁/dγᵥ, dPL₂/dγᵥ, … ]
+deriv_in: []f64, // [ dy/dPL₁, dy/dPL₂, … ]
+deriv_out: *f64, // dy/dγᵥ
 
 width: *PseudoVoigtWidth, // hosted by PseudoVoigtLogL
 

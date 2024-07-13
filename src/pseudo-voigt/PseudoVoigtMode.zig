@@ -1,7 +1,6 @@
 //! Pseudo-Voigt Mode
 value: f64, // μ
-// deriv: []f64,
-// [ dx̄₁/dμ, dx̄₂/dμ, … ], where x̄ᵢ ≡ xᵢ - μ ⇒ dx̄₁/dμ = dx̄₂/dμ = … = -1
+// deriv: []f64, [ dx̄₁/dμ, dx̄₂/dμ, … ], where x̄ᵢ ≡ xᵢ - μ ⇒ dx̄₁/dμ = dx̄₂/dμ = … = -1
 deriv_in: []f64, // [ dy/dx̄₁, dy/dx̄₂, … ]
 
 const Self: type = @This(); // hosted by CenteredData
@@ -20,12 +19,10 @@ pub inline fn deinit(self: *Self, allocator: mem.Allocator) void {
     allocator.destroy(self);
 }
 
-// Called by CenteredData
 pub inline fn forward(self: *Self, mode: f64) void {
     self.value = mode;
 }
 
-// Called by CenteredData
 pub fn backward(self: *Self, deriv_out: []f64) void {
     if (deriv_out.len != 3) unreachable; // [ dy/dμ, dy/dσ, dy/dγ ]
 

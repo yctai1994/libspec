@@ -8,7 +8,6 @@ mode: *PseudoVoigtMode,
 
 const Self: type = @This(); // hosted by PseudoVoigtLogL
 
-// Called by PseudoVoigtLogL
 pub fn init(allocator: mem.Allocator, tape: []f64, n: usize) !*Self {
     const m: usize = 4 * n;
     if (tape.len != m + n + 6) unreachable;
@@ -30,7 +29,6 @@ pub fn init(allocator: mem.Allocator, tape: []f64, n: usize) !*Self {
     return self;
 }
 
-// Called by PseudoVoigtLogL
 pub fn deinit(self: *Self, allocator: mem.Allocator) void {
     self.mode.deinit(allocator);
     allocator.free(self.deriv);
@@ -38,13 +36,11 @@ pub fn deinit(self: *Self, allocator: mem.Allocator) void {
     allocator.destroy(self);
 }
 
-// Called by PseudoVoigtLogL
 pub fn forward(self: *Self, xvec: []f64, mode: f64) void {
     self.mode.forward(mode);
     for (self.value, xvec) |*cdat, data| cdat.* = data - mode;
 }
 
-// Called by PseudoVoigtLogL
 pub fn backward(self: *Self, final_deriv_out: []f64) void {
     const n: usize = self.value.len;
 

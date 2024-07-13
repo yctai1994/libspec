@@ -1,8 +1,8 @@
 //! Pseudo-Voigt Normal Scale
-value: f64 = undefined, // σᵥ
-deriv: []f64 = undefined, // [ dPN₁/dσᵥ, dPN₂/dσᵥ, … ]
-deriv_in: []f64 = undefined, // [ dy/dPN₁, dy/dPN₂, … ]
-deriv_out: *f64 = undefined, // dy/dσᵥ
+value: f64, // σᵥ
+deriv: []f64, // [ dPN₁/dσᵥ, dPN₂/dσᵥ, … ]
+deriv_in: []f64, // [ dy/dPN₁, dy/dPN₂, … ]
+deriv_out: *f64, // dy/dσᵥ
 
 width: *PseudoVoigtWidth, // hosted by PseudoVoigtLogL
 
