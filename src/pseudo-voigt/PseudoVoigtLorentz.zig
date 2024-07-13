@@ -11,6 +11,9 @@ const Self: type = @This(); // hosted by PseudoVoigt
 
 // Called by PseudoVoigt
 fn init(allocator: mem.Allocator, cdata: *CenteredData, width: *PseudoVoigtWidth, tape: []f64, n: usize) !*Self {
+    const m: usize = 2 * n;
+    if (tape.len != (m <<| 1) + n + 6) unreachable;
+
     const self = try allocator.create(Self);
     errdefer allocator.destroy(self);
 
@@ -23,9 +26,8 @@ fn init(allocator: mem.Allocator, cdata: *CenteredData, width: *PseudoVoigtWidth
     self.scale = try PseudoLorentzScale.init(allocator, width, tape, n);
     self.cdata = cdata;
 
-    const m: usize = 2 * n;
     self.deriv_in = tape[n..m]; // [ dy/dPv₁, dy/dPv₂, … ]
-    self.deriv_out = tape[m + n .. m + m]; // [ dy/dPL₁, dy/dPL₂, … ]
+    self.deriv_out = tape[m + n .. m <<| 1]; // [ dy/dPL₁, dy/dPL₂, … ]
 
     return self;
 }
@@ -80,7 +82,7 @@ fn pow2(x: f64) f64 {
 test "PseudoVoigtLorentz: forward & backward" {
     const page = testing.allocator;
 
-    const tape: []f64 = try page.alloc(f64, 4 * test_n + 6);
+    const tape: []f64 = try page.alloc(f64, 5 * test_n + 6);
     defer page.free(tape);
 
     @memset(tape, 1.0);
@@ -108,10 +110,11 @@ test "PseudoVoigtLorentz: forward & backward" {
     @memset(self.deriv, 1.0); // only need for unit-testing
 
     self.backward();
+    cdata.backward(dest);
     width.backward(dest);
 
-    std.debug.print("{d}, {d}\n", .{ self.value[0], dest[1..] });
     try testing.expectApproxEqRel(0x1.85dd27b58e542p-4, self.value[0], 2e-16);
+    try testing.expectApproxEqRel(0x1.7984d5b740738p-8, dest[0], 5e-16);
     try testing.expectApproxEqRel(-0x1.069c4b385bde9p-5, dest[1], 9e-16);
     try testing.expectApproxEqRel(-0x1.28ffb243ea7d8p-6, dest[2], 2e-15);
 }

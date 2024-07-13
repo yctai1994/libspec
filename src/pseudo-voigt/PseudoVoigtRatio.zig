@@ -15,6 +15,9 @@ const RATIO_FAC2: comptime_float = -0.47719; // η₂
 const RATIO_FAC3: comptime_float = 0.11116; // η₃
 
 fn init(allocator: mem.Allocator, width: *PseudoVoigtWidth, tape: []f64, n: usize) !*Self {
+    const m: usize = 5 * n;
+    if (tape.len != m + 6) unreachable;
+
     const self = try allocator.create(Self);
     errdefer allocator.destroy(self);
 
@@ -23,8 +26,8 @@ fn init(allocator: mem.Allocator, width: *PseudoVoigtWidth, tape: []f64, n: usiz
     self.width = width;
     self.lorentz = width.lorentz;
 
-    self.deriv_in = tape[n .. 2 * n]; // [ dPv₁/dη, dPv₂/dη, … ]
-    self.deriv_out = &tape[4 * n + 2]; // dy/dη
+    self.deriv_in = tape[n .. n * 2]; // [ dPv₁/dη, dPv₂/dη, … ]
+    self.deriv_out = &tape[m + 2]; // dy/dη
 
     return self;
 }
@@ -63,7 +66,7 @@ fn backward(self: *Self) void {
 test "PseudoVoigtRatio: forward & backward" {
     const page = testing.allocator;
 
-    const tape: []f64 = try page.alloc(f64, 4 * test_n + 6);
+    const tape: []f64 = try page.alloc(f64, 5 * test_n + 6);
     defer page.free(tape);
 
     @memset(tape, 1.0);

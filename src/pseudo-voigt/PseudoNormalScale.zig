@@ -9,6 +9,8 @@ width: *PseudoVoigtWidth, // hosted by PseudoVoigtLogL
 const Self: type = @This(); // hosted by PseudoVoigtNormal
 
 pub fn init(allocator: mem.Allocator, width: *PseudoVoigtWidth, tape: []f64, n: usize) !*Self {
+    if (tape.len != 5 * n + 6) unreachable;
+
     const self = try allocator.create(Self);
     errdefer allocator.destroy(self);
 
@@ -17,7 +19,7 @@ pub fn init(allocator: mem.Allocator, width: *PseudoVoigtWidth, tape: []f64, n: 
 
     const m: usize = 2 * n;
     self.deriv_in = tape[m .. m + n]; // [ dy/dPN₁, dy/dPN₂, … ]
-    self.deriv_out = &tape[m + m]; // dy/dσᵥ
+    self.deriv_out = &tape[m + m + n]; // dy/dσᵥ
 
     return self;
 }
@@ -44,7 +46,7 @@ pub fn backward(self: *Self) void {
 test "PseudoNormalScale: forward & backward" {
     const page = testing.allocator;
 
-    const tape: []f64 = try page.alloc(f64, 4 * test_n + 6);
+    const tape: []f64 = try page.alloc(f64, 5 * test_n + 6);
     defer page.free(tape);
 
     @memset(tape, 1.0);

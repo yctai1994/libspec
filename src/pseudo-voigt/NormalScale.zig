@@ -6,8 +6,11 @@ deriv_in: *f64, // dy/dFN
 const Self: type = @This(); // hosted by NormalWidth
 
 pub fn init(allocator: mem.Allocator, tape: []f64, n: usize) !*Self {
+    const m: usize = 5 * n;
+    if (tape.len != m + 6) unreachable;
+
     const self = try allocator.create(Self);
-    self.deriv_in = &tape[4 * n + 4]; // dy/dFN
+    self.deriv_in = &tape[m + 4]; // dy/dFN
     return self;
 }
 
@@ -27,7 +30,7 @@ pub fn backward(self: *Self, deriv_out: []f64) void {
 test "init" {
     const page = testing.allocator;
 
-    const tape: []f64 = try page.alloc(f64, 4 * test_n + 6);
+    const tape: []f64 = try page.alloc(f64, 5 * test_n + 6);
     defer page.free(tape);
 
     const self: *Self = try Self.init(page, tape, test_n);

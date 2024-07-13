@@ -17,6 +17,9 @@ const WIDTH_FAC4: comptime_float = 2.69269;
 const WIDTH_FAC5: comptime_float = 1.0;
 
 pub fn init(allocator: mem.Allocator, tape: []f64, n: usize) !*Self {
+    const m: usize = 5 * n;
+    if (tape.len != m + 6) unreachable;
+
     const self = try allocator.create(Self);
     errdefer allocator.destroy(self);
 
@@ -25,7 +28,6 @@ pub fn init(allocator: mem.Allocator, tape: []f64, n: usize) !*Self {
 
     self.lorentz = try LorentzWidth.init(allocator, tape, n);
 
-    const m: usize = 4 * n;
     self.deriv_in = tape[m .. m + 3]; // [ dy/dσᵥ, dy/dγᵥ, dy/dη ]
     self.deriv_out = &tape[m + 3]; // dy/dFᵥ
 
@@ -113,7 +115,7 @@ pub fn backward(self: *Self, final_deriv_out: []f64) void {
 test "PseudoVoigtWidth: forward & backward" {
     const page = testing.allocator;
 
-    const tape: []f64 = try page.alloc(f64, 4 * test_n + 6);
+    const tape: []f64 = try page.alloc(f64, 5 * test_n + 6);
     defer page.free(tape);
 
     @memset(tape, 1.0);

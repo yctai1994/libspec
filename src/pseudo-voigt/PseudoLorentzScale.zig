@@ -9,14 +9,16 @@ width: *PseudoVoigtWidth, // hosted by PseudoVoigtLogL
 const Self: type = @This(); // hosted by PseudoVoigtLorentz
 
 pub fn init(allocator: mem.Allocator, width: *PseudoVoigtWidth, tape: []f64, n: usize) !*Self {
+    const m: usize = n <<| 2;
+    if (tape.len != m + n + 6) unreachable;
+
     const self = try allocator.create(Self);
     errdefer allocator.destroy(self);
 
     self.deriv = try allocator.alloc(f64, n);
     self.width = width;
 
-    const m: usize = 3 * n;
-    self.deriv_in = tape[m .. m + n]; // [ dy/dPL₁, dy/dPL₂, … ]
+    self.deriv_in = tape[m - n .. m]; // [ dy/dPL₁, dy/dPL₂, … ]
     self.deriv_out = &tape[m + n + 1]; // dy/dγᵥ
 
     return self;
@@ -43,7 +45,7 @@ pub fn backward(self: *Self) void {
 test "PseudoLorentzScale: forward & backward" {
     const page = testing.allocator;
 
-    const tape: []f64 = try page.alloc(f64, 4 * test_n + 6);
+    const tape: []f64 = try page.alloc(f64, 5 * test_n + 6);
     defer page.free(tape);
 
     @memset(tape, 1.0);

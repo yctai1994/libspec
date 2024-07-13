@@ -11,6 +11,9 @@ const Self: type = @This(); // hosted by PseudoVoigt
 
 // Called by PseudoVoigt
 fn init(allocator: mem.Allocator, cdata: *CenteredData, width: *PseudoVoigtWidth, tape: []f64, n: usize) !*Self {
+    const m: usize = 2 * n;
+    if (tape.len != (m <<| 1) + n + 6) unreachable;
+
     const self = try allocator.create(Self);
     errdefer allocator.destroy(self);
 
@@ -23,7 +26,6 @@ fn init(allocator: mem.Allocator, cdata: *CenteredData, width: *PseudoVoigtWidth
     self.scale = try PseudoNormalScale.init(allocator, width, tape, n);
     self.cdata = cdata;
 
-    const m: usize = 2 * n;
     self.deriv_in = tape[n..m]; // [ dy/dPv₁, dy/dPv₂, … ]
     self.deriv_out = tape[m .. m + n]; // [ dy/dPN₁, dy/dPN₂, … ]
 
@@ -88,7 +90,7 @@ fn pow2(x: f64) f64 {
 test "PseudoVoigtNormal: forward & backward" {
     const page = testing.allocator;
 
-    const tape: []f64 = try page.alloc(f64, 4 * test_n + 6);
+    const tape: []f64 = try page.alloc(f64, 5 * test_n + 6);
     defer page.free(tape);
 
     @memset(tape, 1.0);
@@ -116,9 +118,11 @@ test "PseudoVoigtNormal: forward & backward" {
     @memset(self.deriv, 1.0); // only need for unit-testing
 
     self.backward();
+    cdata.backward(dest);
     width.backward(dest);
 
     try testing.expectApproxEqRel(0x1.208b65b17ea48p-3, self.value[0], 2e-16);
+    try testing.expectApproxEqRel(0x1.874ee84c784c8p-8, dest[0], 6e-16);
     try testing.expectApproxEqRel(-0x1.8722c64450ac2p-5, dest[1], 9e-16);
     try testing.expectApproxEqRel(-0x1.ba5aafe3f2d82p-6, dest[2], 2e-15);
 }

@@ -9,12 +9,14 @@ scale: *LorentzScale,
 const Self: type = @This(); // hosted by PseudoVoigtWidth
 
 pub fn init(allocator: mem.Allocator, tape: []f64, n: usize) !*Self {
+    const m: usize = 5 * n;
+    if (tape.len != m + 6) unreachable;
+
     const self = try allocator.create(Self);
     errdefer allocator.destroy(self);
 
     self.scale = try LorentzScale.init(allocator, tape, n);
 
-    const m: usize = 4 * n;
     self.deriv_in = tape[m + 2 .. m + 4]; // [ dy/dη, dy/dFᵥ ]
     self.deriv_out = &tape[m + 5]; // dy/dFL
 
@@ -43,7 +45,7 @@ pub fn backward(self: *Self, final_deriv_out: []f64) void {
 test "LorentzWidth: forward & backward" {
     const page = testing.allocator;
 
-    const tape: []f64 = try page.alloc(f64, 4 * test_n + 6);
+    const tape: []f64 = try page.alloc(f64, 5 * test_n + 6);
     defer page.free(tape);
 
     @memset(tape, 1.0);

@@ -8,8 +8,10 @@ mode: *PseudoVoigtMode,
 
 const Self: type = @This(); // hosted by PseudoVoigtLogL
 
+// Called by PseudoVoigtLogL
 pub fn init(allocator: mem.Allocator, tape: []f64, n: usize) !*Self {
-    // if (tape.len != 10) unreachable;
+    const m: usize = 4 * n;
+    if (tape.len != m + n + 6) unreachable;
 
     const self = try allocator.create(Self);
     errdefer allocator.destroy(self);
@@ -22,25 +24,24 @@ pub fn init(allocator: mem.Allocator, tape: []f64, n: usize) !*Self {
 
     self.mode = try PseudoVoigtMode.init(allocator, tape, n);
 
-    // self.deriv_in = tape[TBD]; // [ dy/dPN₁, dy/dPN₂, …, dy/dPL₁, dy/dPL₂, … ]
-    // self.deriv_out = tape[TBD]; // [ dy/dx̄₁, dy/dx̄₂, … ]
+    self.deriv_in = tape[m >> 1 .. m]; // [ dy/dPN₁, dy/dPN₂, …, dy/dPL₁, dy/dPL₂, … ]
+    self.deriv_out = tape[m .. m + n]; // [ dy/dx̄₁, dy/dx̄₂, … ]
 
     return self;
 }
 
+// Called by PseudoVoigtLogL
 pub fn deinit(self: *Self, allocator: mem.Allocator) void {
     self.mode.deinit(allocator);
     allocator.free(self.deriv);
     allocator.free(self.value);
     allocator.destroy(self);
-    return;
 }
 
 // Called by PseudoVoigtLogL
 pub fn forward(self: *Self, xvec: []f64, mode: f64) void {
     self.mode.forward(mode);
     for (self.value, xvec) |*cdat, data| cdat.* = data - mode;
-    return;
 }
 
 // Called by PseudoVoigtLogL
@@ -48,19 +49,18 @@ pub fn backward(self: *Self, final_deriv_out: []f64) void {
     const n: usize = self.value.len;
 
     // [ dy/dx̄₁, dy/dx̄₂, … ] = [ dPN₁/dx̄₁, dPN₂/dx̄₂, … ]ᵀ ⋅ [ dy/dPN₁, dy/dPN₂, … ]
-    for (self.deriv[0..n], self.deriv_in[0..n], self.deriv_out) |d, din, *dout| dout.* = d * din;
+    for (self.deriv_out, self.deriv[0..n], self.deriv_in[0..n]) |*dout, d, din| dout.* = d * din;
 
     // [ dy/dx̄₁, dy/dx̄₂, … ] += [ dPL₁/dx̄₁, dPL₂/dx̄₂, … ]ᵀ ⋅ [ dy/dPL₁, dy/dPL₂, … ]
-    for (self.deriv[n..], self.deriv_in[n..], self.deriv_out) |d, din, *dout| dout.* += d * din;
+    for (self.deriv_out, self.deriv[n..], self.deriv_in[n..]) |*dout, d, din| dout.* += d * din;
 
-    self.mode.backward(final_deriv_out);
-
-    return;
+    return self.mode.backward(final_deriv_out);
 }
 
 test "init" {
     const page = testing.allocator;
-    const self = try Self.init(page, &.{}, 10);
+    var tape: [6]f64 = undefined;
+    const self = try Self.init(page, &tape, 0);
     defer self.deinit(page);
 }
 
