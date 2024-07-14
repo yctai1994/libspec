@@ -94,6 +94,219 @@ test "BFGS.init and BFGS.deinit" {
     bfgs.deinit(page);
 }
 
+fn search(
+    xnow: []f64,
+    xnew: []f64,
+    dnow: []f64,
+    dnew: []f64,
+    pnow: []f64,
+    func: *const fn (x: []f64) f64,
+    grad: *const fn (x: []f64, g: []f64) void,
+) f64 {
+    const c1: comptime_float = 1e-4;
+    const c2: comptime_float = 0.1;
+
+    const amax: comptime_float = 0.5;
+    const amin: comptime_float = 0.0;
+
+    const phi_0: f64 = func(xnow);
+    grad(xnow, dnow);
+    for (pnow, dnow) |*p, d| p.* = -d;
+    const dphi_0: f64 = dot(pnow, dnow);
+
+    var phi_old: f64 = undefined;
+    var phi: f64 = undefined;
+    var dphi: f64 = undefined;
+
+    var a_old: f64 = amin;
+    var a: f64 = 0.5 * (amin + amax);
+
+    var iter: usize = 0;
+
+    while (iter < 10) : (iter += 1) {
+        for (xnew, xnow, pnow) |*xnew_i, xnow_i, pnow_i| xnew_i.* = xnow_i + a * pnow_i; // xₜ ← xₘ + α⋅pₘ
+        phi = func(xnew); // ϕ(α) = f(xₘ + α⋅pₘ)
+
+        // Test Wolfe conditions
+        if ((phi > phi_0 + c1 * a * dphi_0) or (iter > 0 and phi > phi_old)) {
+            return zoom(a_old, a, phi_0, dphi_0, xnow, xnew, dnew, pnow, func, grad);
+        }
+
+        grad(xnew, dnew); // ∇f(xₘ + α⋅pₘ)
+        dphi = dot(pnow, dnew); // ϕ'(α) = pₘᵀ⋅∇f(xₘ + α⋅pₘ)
+
+        if (@abs(dphi) <= -c2 * dphi_0) return a;
+        if (0.0 <= dphi) return zoom(a, a_old, phi_0, dphi_0, xnow, xnew, dnew, pnow, func, grad);
+
+        a_old = a;
+        phi_old = phi;
+        a = 0.5 * (a + amax);
+    } else unreachable;
+}
+
+fn zoom(
+    a_lb: f64,
+    a_rb: f64, // it's possible that a_lb > a_rb
+    phi_0: f64,
+    dphi_0: f64,
+    xnow: []f64,
+    xtmp: []f64,
+    dtmp: []f64,
+    pnow: []f64,
+    func: *const fn (x: []f64) f64,
+    grad: *const fn (x: []f64, g: []f64) void,
+) f64 {
+    const c1: comptime_float = 1e-3;
+    const c2: comptime_float = 0.9;
+
+    var phi_lo: f64 = undefined;
+    var phi_hi: f64 = undefined;
+
+    var dphi_lo: f64 = undefined;
+    var dphi_hi: f64 = undefined;
+
+    var a_lo: f64 = a_lb;
+    var a_hi: f64 = a_rb;
+
+    var phi: f64 = undefined;
+    var dphi: f64 = undefined;
+
+    var a: f64 = undefined;
+
+    var iter: usize = 0;
+
+    while (iter < 10) : (iter += 1) {
+        for (xtmp, xnow, pnow) |*x_lo, xnow_i, pnow_i| x_lo.* = xnow_i + a_lo * pnow_i; // xₜ ← xₘ + α_lo⋅pₘ
+        grad(xtmp, dtmp); // ∇f(xₘ + α_lo⋅pₘ)
+        phi_lo = func(xtmp); // ϕ(α_lo) = f(xₘ + α_lo⋅pₘ)
+        dphi_lo = dot(pnow, dtmp); // ϕ'(α_lo) = pₘᵀ⋅∇f(xₘ + α_lo⋅pₘ)
+
+        for (xtmp, xnow, pnow) |*x_hi, xnow_i, pnow_i| x_hi.* = xnow_i + a_hi * pnow_i; // xₜ ← xₘ + α_hi⋅pₘ
+        grad(xtmp, dtmp); // ∇f(xₘ + α_hi⋅pₘ)
+        phi_hi = func(xtmp); // ϕ(α_hi) = f(xₘ + α_hi⋅pₘ)
+        dphi_hi = dot(pnow, dtmp); // ϕ'(α_hi) = pₘᵀ⋅∇f(xₘ + α_hi⋅pₘ)
+
+        // # Interpolate α
+        if (a_lo < a_hi) {
+            a = interpolate(a_lo, a_hi, phi_lo, phi_hi, dphi_lo, dphi_hi);
+        } else {
+            a = interpolate(a_hi, a_lo, phi_hi, phi_lo, dphi_hi, dphi_lo);
+        }
+        for (xtmp, xnow, pnow) |*xtmp_i, xnow_i, pnow_i| xtmp_i.* = xnow_i + a * pnow_i; // xₜ ← xₘ + α⋅pₘ
+        phi = func(xtmp); // ϕ(α) = f(xₘ + α⋅pₘ)
+
+        if ((phi > phi_0 + c1 * a * dphi_0) or (phi > phi_lo)) {
+            a_hi = a;
+        } else {
+            grad(xtmp, dtmp); // ∇f(xₘ + α⋅pₘ)
+            dphi = dot(pnow, dtmp); // ϕ'(α) = pₘᵀ⋅∇f(xₘ + α⋅pₘ)
+
+            if (@abs(dphi) <= -c2 * dphi_0) return a;
+            if (0.0 <= dphi * (a_hi - a_lo)) a_hi = a_lo;
+
+            a_lo = a;
+        }
+    } else unreachable;
+}
+
+// Restrict: a_old < a_now
+fn interpolate(a_old: f64, a_now: f64, phi_old: f64, phi_now: f64, dphi_old: f64, dphi_now: f64) f64 {
+    const d1: f64 = dphi_old + dphi_now - 3.0 * (phi_old - phi_now) / (a_old - a_now);
+    const d2: f64 = @sqrt(d1 * d1 - dphi_old * dphi_now);
+    return a_now - (a_now - a_old) *
+        ((dphi_now + d2 - d1) /
+        (dphi_now - dphi_old + 2 * d2));
+}
+
+fn firstStep(
+    self: *const @This(),
+    func: *const fn (x: []f64) f64,
+    grad: *const fn (x: []f64, g: []f64) void,
+) !void {
+    // xₙ ← xₘ + α⋅pₘ
+    _ = search(self.xm, self.xn, self.gm, self.gn, self.sm, func, grad);
+
+    // gₙ ← ∇f(xₙ)
+    self.df(self.xn, self.gn);
+
+    // sₘ ← xₙ - xₘ
+    for (self.sm, self.xn, self.xm) |*sm_i, xn_i, xm_i| sm_i.* = xn_i - xm_i;
+
+    // yₘ ← ∇f(xₙ) - ∇f(xₘ) = gₙ - gₘ
+    for (self.ym, self.gn, self.gm) |*ym_i, gn_i, gm_i| ym_i.* = gn_i - gm_i;
+
+    // secant_norm2 ← yₘᵀ⋅sₘ
+    var secant_norm2: f64 = dot(self.ym, self.sm);
+
+    // √(yₘᵀ⋅yₘ / yₘᵀ⋅sₘ)
+    const diag: f64 = @sqrt(dot(self.ym, self.ym) / secant_norm2);
+    for (self.Bm.matrix, 0..) |Bm_i, i| {
+        @memset(Bm_i, 0.0);
+        Bm_i[i] = diag;
+    }
+
+    // sₘ ← Lₘᵀ⋅sₘ = Rₘ⋅sₘ
+    self.Bm.dtrmv(self.sm);
+
+    // sₘᵀ⋅(Lₘ⋅Lₘᵀ)⋅sₘ ← sₘᵀ⋅sₘ
+    const quadratic_form: f64 = dot(self.sm, self.sm);
+    // std.debug.print("quadratic_form = {e}\n", .{quadratic_form});
+
+    // Damped BFGS parameter θₘ [3]
+    //     rₘ = θₘ⋅yₘ + (1 - θₘ)⋅Bₘ⋅sₘ
+    //     θₘ = | 1,                                    if yₘᵀ⋅sₘ ≥ 0.2⋅sₘᵀ⋅Bₘ⋅sₘ
+    //          | 0.8⋅sₘᵀ⋅Bₘ⋅sₘ / (sₘᵀ⋅Bₘ⋅sₘ - yₘᵀ⋅sₘ), if yₘᵀ⋅sₘ < 0.2⋅sₘᵀ⋅Bₘ⋅sₘ
+    // rₘᵀ⋅sₘ = | yₘᵀ⋅sₘ,                               if yₘᵀ⋅sₘ ≥ 0.2⋅sₘᵀ⋅Bₘ⋅sₘ
+    //          | 0.2⋅sₘᵀ⋅Bₘ⋅sₘ,                        if yₘᵀ⋅sₘ < 0.2⋅sₘᵀ⋅Bₘ⋅sₘ
+    var theta_m: f64 = undefined;
+    if (0.2 * quadratic_form <= secant_norm2) {
+        theta_m = 1.0;
+    } else {
+        theta_m = 0.8 * quadratic_form / (quadratic_form - secant_norm2);
+        secant_norm2 = 0.2 * quadratic_form;
+    }
+    // std.debug.print("theta_m = {d}\n", .{theta_m});
+
+    // αₘ ← √(secant_norm2 / quadratic_form)
+    const alpha_m: f64 = @sqrt(secant_norm2 / quadratic_form);
+    // std.debug.print("alpha_m = {e}\n", .{alpha_m});
+
+    // aₘ ← αₘ⋅Lₘᵀ⋅sₘ = αₘ⋅Rₘ⋅sₘ
+    for (self.am, self.sm) |*am_i, sm_i| am_i.* = alpha_m * sm_i;
+    // std.debug.print("am = {e}\n", .{self.am});
+
+    // ‖aₘ‖ ← √(rₘᵀ⋅sₘ)
+    const secant_norm: f64 = @sqrt(secant_norm2);
+    // std.debug.print("secant_norm = {e}\n", .{secant_norm});
+
+    // uₘ ← aₘ / ‖aₘ‖
+    for (self.um, self.am) |*um_i, am_i| um_i.* = am_i / secant_norm;
+    // std.debug.print("um = {e}\n", .{self.um});
+
+    // vₘ ← θₘ⋅yₘ
+    for (self.vm, self.ym) |*vm_i, ym_i| vm_i.* = theta_m * ym_i;
+
+    // vₘ ← vₘ + Rₘᵀ[(1 - θₘ - αₘ)⋅Rₘ⋅sₘ]
+    const temp: f64 = 1.0 - theta_m - alpha_m;
+    for (self.Bm.matrix, self.sm, 0..) |R_i, s_i, i| {
+        for (self.vm[i..], R_i[i..]) |*v_j, R_ij| {
+            v_j.* += temp * R_ij * s_i;
+        }
+    }
+
+    // vₘ ← vₘ / ‖aₘ‖
+    for (self.vm) |*vm_i| vm_i.* /= secant_norm;
+    // std.debug.print("vm = {e}\n", .{self.vm});
+
+    try self.Bm.update(self.um, self.vm);
+    // std.debug.print("Bm = {e}\n", .{self.Bm.matrix});
+
+    @memcpy(self.xm, self.xn); // copyto(self.xn, self.xm);
+    @memcpy(self.gm, self.gn); // copyto(self.gn, self.gm);
+
+    return;
+}
+
 fn iterate(self: *const @This()) !void {
     // std.debug.print("xm = {e}\n", .{self.xm});
 
@@ -105,7 +318,7 @@ fn iterate(self: *const @This()) !void {
     // pₘ := sₘ, ∇f(xₘ) := gₘ
     self.Bm.solve(self.sm, self.gm);
 
-    // xₙ ← xₘ + pₘ
+    // xₙ ← xₘ - pₘ
     for (self.xn, self.xm, self.sm) |*xn_i, xm_i, pc_i| xn_i.* = xm_i - pc_i;
     // std.debug.print("xn = {e}\n", .{self.xn});
 
@@ -217,11 +430,12 @@ test "BFGS.iterate #2" {
 
     inline for (.{ -1.2, 1.0 }, bfgs.xm) |v, *p| p.* = v;
 
-    inline for (.{ 0x1.23c0d99c17436p+5, 0x1.a52d7f6fc5311p+3 }, bfgs.Bm.matrix[0]) |v, *p| p.* = v;
-    inline for (.{ 0x0.0000000000000p+0, 0x1.4b1d7f7c3508bp+2 }, bfgs.Bm.matrix[1]) |v, *p| p.* = v;
-
-    for (0..58) |_| try bfgs.iterate();
-    // std.debug.print("{d}\n", .{bfgs.xm});
+    try bfgs.firstStep(rosenbrock, rosenbrock_deriv);
+    std.debug.print("{d}, {d}\n", .{ bfgs.xm, rosenbrock(bfgs.xm) });
+    for (0..54) |_| {
+        try bfgs.iterate();
+        std.debug.print("{d}, {d}\n", .{ bfgs.xm, rosenbrock(bfgs.xm) });
+    }
 
     const y: [2]f64 = .{ 1.0, 1.0 };
     try testing.expect(mem.eql(f64, &y, bfgs.xm));
@@ -507,6 +721,10 @@ fn ellipse_deriv(x: []f64, g: []f64) void {
     return;
 }
 
+fn rosenbrock(x: []f64) f64 {
+    return pow2(f64, 1.0 - x[0]) + 100.0 * pow2(f64, x[1] - pow2(f64, x[0]));
+}
+
 fn rosenbrock_deriv(x: []f64, g: []f64) void {
     g[0] = -400 * x[0] * (x[1] - pow2(f64, x[0])) - 2 * (1 - x[0]);
     g[1] = 200 * (x[1] - pow2(f64, x[0]));
@@ -516,6 +734,7 @@ fn rosenbrock_deriv(x: []f64, g: []f64) void {
 const std = @import("std");
 const mem = std.mem;
 const math = std.math;
+const debug = std.debug;
 const testing = std.testing;
 
 const poly = @import("./poly.zig");
