@@ -7,7 +7,10 @@
 //!     2007, Sec. 2.10.1
 //! [3] J. Nocedal, S. J. Wright,
 //!     "Numerical Optimization 2nd Edition,"
-//!     2006, Procedure. 18.2
+//!     2006, Algorithm 3.5, 3.6
+//! [4] J. Nocedal, S. J. Wright,
+//!     "Numerical Optimization 2nd Edition,"
+//!     2006, Procedure 18.2
 
 xm: []f64 = undefined, // xₘ
 xn: []f64 = undefined, // xₙ
@@ -23,17 +26,15 @@ um: []f64 = undefined,
 vm: []f64 = undefined,
 
 Bm: *Hess = undefined, // current approximation of Hessian
-df: *const fn (x: []f64, g: []f64) void,
-
-// already comptime scope
-const slice_al: comptime_int = @alignOf([]f64);
-const child_al: comptime_int = @alignOf(f64);
-const slice_sz: comptime_int = @sizeOf(usize) * 2;
-const child_sz: comptime_int = @sizeOf(f64);
 
 const AllocError = mem.Allocator.Error;
 
-pub fn init(self: *@This(), allocator: mem.Allocator, n: usize) AllocError!void {
+const Self: type = @This();
+
+pub fn init(allocator: mem.Allocator, n: usize) AllocError!*Self {
+    const self: *Self = try allocator.create(Self);
+    errdefer allocator.destroy(self);
+
     self.xm = try allocator.alloc(f64, n);
     errdefer allocator.free(self.xm);
 
@@ -61,58 +62,40 @@ pub fn init(self: *@This(), allocator: mem.Allocator, n: usize) AllocError!void 
     self.vm = try allocator.alloc(f64, n);
     errdefer allocator.free(self.vm);
 
-    self.Bm = try allocator.create(Hess);
-    errdefer allocator.destroy(self.Bm);
+    self.Bm = try Hess.init(allocator, n);
 
-    try self.Bm.init(allocator, n);
-
-    return;
+    return self;
 }
 
-pub fn deinit(self: *const @This(), allocator: mem.Allocator) void {
-    allocator.free(self.xm);
-    allocator.free(self.xn);
-    allocator.free(self.gm);
-    allocator.free(self.gn);
-    allocator.free(self.sm);
-    allocator.free(self.ym);
-    allocator.free(self.am);
-    allocator.free(self.um);
-    allocator.free(self.vm);
-
+pub fn deinit(self: *const Self, allocator: mem.Allocator) void {
     self.Bm.deinit(allocator);
-    allocator.destroy(self.Bm);
 
-    return;
+    allocator.free(self.vm);
+    allocator.free(self.um);
+    allocator.free(self.am);
+    allocator.free(self.ym);
+    allocator.free(self.sm);
+    allocator.free(self.gn);
+    allocator.free(self.gm);
+    allocator.free(self.xn);
+    allocator.free(self.xm);
+
+    allocator.destroy(self);
 }
 
-test "BFGS.init and BFGS.deinit" {
-    const page = std.testing.allocator;
-
-    var bfgs: @This() = .{ .df = ellipse_deriv };
-    try bfgs.init(page, 3);
-    bfgs.deinit(page);
-}
-
-fn search(
-    xnow: []f64,
-    xnew: []f64,
-    dnow: []f64,
-    dnew: []f64,
-    pnow: []f64,
-    func: *const fn (x: []f64) f64,
-    grad: *const fn (x: []f64, g: []f64) void,
-) f64 {
+fn search(self: *const Self, obj: anytype) void {
     const c1: comptime_float = 1e-4;
     const c2: comptime_float = 0.1;
 
     const amax: comptime_float = 0.5;
     const amin: comptime_float = 0.0;
 
-    const phi_0: f64 = func(xnow);
-    grad(xnow, dnow);
-    for (pnow, dnow) |*p, d| p.* = -d;
-    const dphi_0: f64 = dot(pnow, dnow);
+    const phi_0: f64 = obj.func(self.xm); // ϕ(0) = f(xₘ)
+    obj.grad(self.xm, self.gm); // ∇f(xₘ)
+    for (self.sm, self.gm) |*p, d| p.* = -d; // pₘ ← -∇f(xₘ)
+    const dphi_0: f64 = dot(self.sm, self.gm); // ϕ'(0) = pₘᵀ⋅∇f(xₘ)
+
+    if (0.0 < dphi_0) unreachable;
 
     var phi_old: f64 = undefined;
     var phi: f64 = undefined;
@@ -124,19 +107,19 @@ fn search(
     var iter: usize = 0;
 
     while (iter < 10) : (iter += 1) {
-        for (xnew, xnow, pnow) |*xnew_i, xnow_i, pnow_i| xnew_i.* = xnow_i + a * pnow_i; // xₜ ← xₘ + α⋅pₘ
-        phi = func(xnew); // ϕ(α) = f(xₘ + α⋅pₘ)
+        for (self.xn, self.xm, self.sm) |*xn_i, xm_i, sm_i| xn_i.* = xm_i + a * sm_i; // xₜ ← xₘ + α⋅pₘ
+        phi = obj.func(self.xn); // ϕ(α) = f(xₘ + α⋅pₘ)
 
         // Test Wolfe conditions
         if ((phi > phi_0 + c1 * a * dphi_0) or (iter > 0 and phi > phi_old)) {
-            return zoom(a_old, a, phi_0, dphi_0, xnow, xnew, dnew, pnow, func, grad);
+            return self.zoom(a_old, a, phi_0, dphi_0, obj);
         }
 
-        grad(xnew, dnew); // ∇f(xₘ + α⋅pₘ)
-        dphi = dot(pnow, dnew); // ϕ'(α) = pₘᵀ⋅∇f(xₘ + α⋅pₘ)
+        obj.grad(self.xn, self.gn); // ∇f(xₘ + α⋅pₘ)
+        dphi = dot(self.sm, self.gn); // ϕ'(α) = pₘᵀ⋅∇f(xₘ + α⋅pₘ)
 
-        if (@abs(dphi) <= -c2 * dphi_0) return a;
-        if (0.0 <= dphi) return zoom(a, a_old, phi_0, dphi_0, xnow, xnew, dnew, pnow, func, grad);
+        if (@abs(dphi) <= -c2 * dphi_0) break; // return a;
+        if (0.0 <= dphi) return self.zoom(a, a_old, phi_0, dphi_0, obj);
 
         a_old = a;
         phi_old = phi;
@@ -144,18 +127,8 @@ fn search(
     } else unreachable;
 }
 
-fn zoom(
-    a_lb: f64,
-    a_rb: f64, // it's possible that a_lb > a_rb
-    phi_0: f64,
-    dphi_0: f64,
-    xnow: []f64,
-    xtmp: []f64,
-    dtmp: []f64,
-    pnow: []f64,
-    func: *const fn (x: []f64) f64,
-    grad: *const fn (x: []f64, g: []f64) void,
-) f64 {
+// it's possible that a_lb > a_rb
+fn zoom(self: *const Self, a_lb: f64, a_rb: f64, phi_0: f64, dphi_0: f64, obj: anytype) void {
     const c1: comptime_float = 1e-3;
     const c2: comptime_float = 0.9;
 
@@ -168,80 +141,98 @@ fn zoom(
     var a_lo: f64 = a_lb;
     var a_hi: f64 = a_rb;
 
+    var a: f64 = undefined;
     var phi: f64 = undefined;
     var dphi: f64 = undefined;
 
-    var a: f64 = undefined;
-
     var iter: usize = 0;
 
+    for (self.xn, self.xm, self.sm) |*x_lo, xm_i, sm_i| x_lo.* = xm_i + a_lo * sm_i; // xₜ ← xₘ + α_lo⋅pₘ
+    obj.grad(self.xn, self.gn); // ∇f(xₘ + α_lo⋅pₘ)
+    phi_lo = obj.func(self.xn); // ϕ(α_lo) = f(xₘ + α_lo⋅pₘ)
+    dphi_lo = dot(self.sm, self.gn); // ϕ'(α_lo) = pₘᵀ⋅∇f(xₘ + α_lo⋅pₘ)
+
+    for (self.xn, self.xm, self.sm) |*x_hi, xm_i, sm_i| x_hi.* = xm_i + a_hi * sm_i; // xₜ ← xₘ + α_hi⋅pₘ
+    obj.grad(self.xn, self.gn); // ∇f(xₘ + α_hi⋅pₘ)
+    phi_hi = obj.func(self.xn); // ϕ(α_hi) = f(xₘ + α_hi⋅pₘ)
+    dphi_hi = dot(self.sm, self.gn); // ϕ'(α_hi) = pₘᵀ⋅∇f(xₘ + α_hi⋅pₘ), ϕ'(α_hi) can be positive
+
     while (iter < 10) : (iter += 1) {
-        for (xtmp, xnow, pnow) |*x_lo, xnow_i, pnow_i| x_lo.* = xnow_i + a_lo * pnow_i; // xₜ ← xₘ + α_lo⋅pₘ
-        grad(xtmp, dtmp); // ∇f(xₘ + α_lo⋅pₘ)
-        phi_lo = func(xtmp); // ϕ(α_lo) = f(xₘ + α_lo⋅pₘ)
-        dphi_lo = dot(pnow, dtmp); // ϕ'(α_lo) = pₘᵀ⋅∇f(xₘ + α_lo⋅pₘ)
+        // Interpolate α
+        a = if (a_lo < a_hi)
+            interpolate(a_lo, a_hi, phi_lo, phi_hi, dphi_lo, dphi_hi)
+        else
+            interpolate(a_hi, a_lo, phi_hi, phi_lo, dphi_hi, dphi_lo);
 
-        for (xtmp, xnow, pnow) |*x_hi, xnow_i, pnow_i| x_hi.* = xnow_i + a_hi * pnow_i; // xₜ ← xₘ + α_hi⋅pₘ
-        grad(xtmp, dtmp); // ∇f(xₘ + α_hi⋅pₘ)
-        phi_hi = func(xtmp); // ϕ(α_hi) = f(xₘ + α_hi⋅pₘ)
-        dphi_hi = dot(pnow, dtmp); // ϕ'(α_hi) = pₘᵀ⋅∇f(xₘ + α_hi⋅pₘ)
-
-        // # Interpolate α
-        if (a_lo < a_hi) {
-            a = interpolate(a_lo, a_hi, phi_lo, phi_hi, dphi_lo, dphi_hi);
-        } else {
-            a = interpolate(a_hi, a_lo, phi_hi, phi_lo, dphi_hi, dphi_lo);
-        }
-        for (xtmp, xnow, pnow) |*xtmp_i, xnow_i, pnow_i| xtmp_i.* = xnow_i + a * pnow_i; // xₜ ← xₘ + α⋅pₘ
-        phi = func(xtmp); // ϕ(α) = f(xₘ + α⋅pₘ)
+        for (self.xn, self.xm, self.sm) |*xn_i, xm_i, sm_i| xn_i.* = xm_i + a * sm_i; // xₜ ← xₘ + α⋅pₘ
+        phi = obj.func(self.xn); // ϕ(α) = f(xₘ + α⋅pₘ)
+        obj.grad(self.xn, self.gn); // ∇f(xₘ + α⋅pₘ)
+        dphi = dot(self.sm, self.gn); // ϕ'(α) = pₘᵀ⋅∇f(xₘ + α⋅pₘ)
 
         if ((phi > phi_0 + c1 * a * dphi_0) or (phi > phi_lo)) {
             a_hi = a;
+            phi_hi = phi;
+            dphi_hi = dphi;
         } else {
-            grad(xtmp, dtmp); // ∇f(xₘ + α⋅pₘ)
-            dphi = dot(pnow, dtmp); // ϕ'(α) = pₘᵀ⋅∇f(xₘ + α⋅pₘ)
-
-            if (@abs(dphi) <= -c2 * dphi_0) return a;
-            if (0.0 <= dphi * (a_hi - a_lo)) a_hi = a_lo;
+            if (@abs(dphi) <= -c2 * dphi_0) break; // return a;
+            if (0.0 <= dphi * (a_hi - a_lo)) {
+                a_hi = a_lo;
+                phi_hi = phi_lo;
+                dphi_hi = dphi_lo;
+            }
 
             a_lo = a;
+            phi_lo = phi;
+            dphi_lo = dphi;
         }
     } else unreachable;
 }
 
-// Restrict: a_old < a_now
 fn interpolate(a_old: f64, a_now: f64, phi_old: f64, phi_now: f64, dphi_old: f64, dphi_now: f64) f64 {
+    if (!(a_old < a_now)) unreachable;
     const d1: f64 = dphi_old + dphi_now - 3.0 * (phi_old - phi_now) / (a_old - a_now);
     const d2: f64 = @sqrt(d1 * d1 - dphi_old * dphi_now);
-    return a_now - (a_now - a_old) *
-        ((dphi_now + d2 - d1) /
-        (dphi_now - dphi_old + 2 * d2));
+    const nu: f64 = dphi_now + d2 - d1;
+    const de: f64 = dphi_now - dphi_old + 2.0 * d2;
+    return a_now - (a_now - a_old) * (nu / de);
 }
 
-fn firstStep(
-    self: *const @This(),
-    func: *const fn (x: []f64) f64,
-    grad: *const fn (x: []f64, g: []f64) void,
-) !void {
+const Termination = struct {
+    xtol: ?f64 = null,
+    gtol: ?f64 = null,
+};
+
+fn firstStep(self: *const Self, obj: anytype, comptime term: Termination) !bool {
+    const xtol: comptime_float = comptime term.xtol orelse math.floatEps(f64);
+    const gtol: comptime_float = comptime term.gtol orelse math.floatEps(f64);
+
     // xₙ ← xₘ + α⋅pₘ
-    _ = search(self.xm, self.xn, self.gm, self.gn, self.sm, func, grad);
+    self.search(obj);
 
     // gₙ ← ∇f(xₙ)
-    self.df(self.xn, self.gn);
+    obj.grad(self.xn, self.gn);
 
     // sₘ ← xₙ - xₘ
     for (self.sm, self.xn, self.xm) |*sm_i, xn_i, xm_i| sm_i.* = xn_i - xm_i;
+    var snrm: f64 = 0.0;
+    for (self.sm) |sm_i| snrm += pow2(sm_i);
+    snrm = @sqrt(snrm);
+    if (snrm <= xtol) return true;
 
     // yₘ ← ∇f(xₙ) - ∇f(xₘ) = gₙ - gₘ
     for (self.ym, self.gn, self.gm) |*ym_i, gn_i, gm_i| ym_i.* = gn_i - gm_i;
+    var ymax: f64 = 0.0;
+    for (self.ym) |ym_i| ymax = @max(ymax, @abs(ym_i));
+    if (ymax <= gtol) return true;
 
     // secant_norm2 ← yₘᵀ⋅sₘ
     var secant_norm2: f64 = dot(self.ym, self.sm);
+    if (secant_norm2 <= 0.0) unreachable;
 
     // √(yₘᵀ⋅yₘ / yₘᵀ⋅sₘ)
     const diag: f64 = @sqrt(dot(self.ym, self.ym) / secant_norm2);
     for (self.Bm.matrix, 0..) |Bm_i, i| {
-        @memset(Bm_i, 0.0);
+        @memset(Bm_i[i..], 0.0);
         Bm_i[i] = diag;
     }
 
@@ -250,7 +241,6 @@ fn firstStep(
 
     // sₘᵀ⋅(Lₘ⋅Lₘᵀ)⋅sₘ ← sₘᵀ⋅sₘ
     const quadratic_form: f64 = dot(self.sm, self.sm);
-    // std.debug.print("quadratic_form = {e}\n", .{quadratic_form});
 
     // Damped BFGS parameter θₘ [3]
     //     rₘ = θₘ⋅yₘ + (1 - θₘ)⋅Bₘ⋅sₘ
@@ -265,23 +255,18 @@ fn firstStep(
         theta_m = 0.8 * quadratic_form / (quadratic_form - secant_norm2);
         secant_norm2 = 0.2 * quadratic_form;
     }
-    // std.debug.print("theta_m = {d}\n", .{theta_m});
 
     // αₘ ← √(secant_norm2 / quadratic_form)
     const alpha_m: f64 = @sqrt(secant_norm2 / quadratic_form);
-    // std.debug.print("alpha_m = {e}\n", .{alpha_m});
 
     // aₘ ← αₘ⋅Lₘᵀ⋅sₘ = αₘ⋅Rₘ⋅sₘ
     for (self.am, self.sm) |*am_i, sm_i| am_i.* = alpha_m * sm_i;
-    // std.debug.print("am = {e}\n", .{self.am});
 
     // ‖aₘ‖ ← √(rₘᵀ⋅sₘ)
     const secant_norm: f64 = @sqrt(secant_norm2);
-    // std.debug.print("secant_norm = {e}\n", .{secant_norm});
 
     // uₘ ← aₘ / ‖aₘ‖
     for (self.um, self.am) |*um_i, am_i| um_i.* = am_i / secant_norm;
-    // std.debug.print("um = {e}\n", .{self.um});
 
     // vₘ ← θₘ⋅yₘ
     for (self.vm, self.ym) |*vm_i, ym_i| vm_i.* = theta_m * ym_i;
@@ -296,23 +281,21 @@ fn firstStep(
 
     // vₘ ← vₘ / ‖aₘ‖
     for (self.vm) |*vm_i| vm_i.* /= secant_norm;
-    // std.debug.print("vm = {e}\n", .{self.vm});
 
     try self.Bm.update(self.um, self.vm);
-    // std.debug.print("Bm = {e}\n", .{self.Bm.matrix});
 
-    @memcpy(self.xm, self.xn); // copyto(self.xn, self.xm);
-    @memcpy(self.gm, self.gn); // copyto(self.gn, self.gm);
+    @memcpy(self.xm, self.xn);
+    @memcpy(self.gm, self.gn);
 
-    return;
+    return false;
 }
 
-fn iterate(self: *const @This()) !void {
-    // std.debug.print("xm = {e}\n", .{self.xm});
+fn iterate(self: *const Self, obj: anytype, comptime term: Termination) !bool {
+    const xtol: comptime_float = comptime term.xtol orelse math.floatEps(f64);
+    const gtol: comptime_float = comptime term.gtol orelse math.floatEps(f64);
 
     // gₘ ← ∇f(xₘ)
-    self.df(self.xm, self.gm);
-    // std.debug.print("gm = {e}\n", .{self.gm});
+    obj.grad(self.xm, self.gm);
 
     // pₘ ← Bₘ⁻¹⋅∇f(xₘ), store `pₘ` in `sₘ`
     // pₘ := sₘ, ∇f(xₘ) := gₘ
@@ -320,30 +303,32 @@ fn iterate(self: *const @This()) !void {
 
     // xₙ ← xₘ - pₘ
     for (self.xn, self.xm, self.sm) |*xn_i, xm_i, pc_i| xn_i.* = xm_i - pc_i;
-    // std.debug.print("xn = {e}\n", .{self.xn});
 
     // gₙ ← ∇f(xₙ)
-    self.df(self.xn, self.gn);
-    // std.debug.print("gn = {e}\n", .{self.gn});
+    obj.grad(self.xn, self.gn);
 
     // sₘ ← xₙ - xₘ
     for (self.sm, self.xn, self.xm) |*sm_i, xn_i, xm_i| sm_i.* = xn_i - xm_i;
-    // std.debug.print("sm = {e}\n", .{self.sm});
+    var snrm: f64 = 0.0;
+    for (self.sm) |sm_i| snrm += pow2(sm_i);
+    snrm = @sqrt(snrm);
+    if (snrm <= xtol) return true;
 
     // yₘ ← ∇f(xₙ) - ∇f(xₘ) = gₙ - gₘ
     for (self.ym, self.gn, self.gm) |*ym_i, gn_i, gm_i| ym_i.* = gn_i - gm_i;
-    // std.debug.print("ym = {e}\n", .{self.ym});
+    var ymax: f64 = 0.0;
+    for (self.ym) |ym_i| ymax = @max(ymax, @abs(ym_i));
+    if (ymax <= gtol) return true;
 
     // secant_norm2 ← yₘᵀ⋅sₘ
     var secant_norm2: f64 = dot(self.ym, self.sm);
-    // std.debug.print("secant_norm2 = {e}\n", .{secant_norm2});
+    if (secant_norm2 <= 0.0) unreachable;
 
     // sₘ ← Lₘᵀ⋅sₘ = Rₘ⋅sₘ
     self.Bm.dtrmv(self.sm);
 
     // sₘᵀ⋅(Lₘ⋅Lₘᵀ)⋅sₘ ← sₘᵀ⋅sₘ
     const quadratic_form: f64 = dot(self.sm, self.sm);
-    // std.debug.print("quadratic_form = {e}\n", .{quadratic_form});
 
     // Damped BFGS parameter θₘ [3]
     //     rₘ = θₘ⋅yₘ + (1 - θₘ)⋅Bₘ⋅sₘ
@@ -358,23 +343,18 @@ fn iterate(self: *const @This()) !void {
         theta_m = 0.8 * quadratic_form / (quadratic_form - secant_norm2);
         secant_norm2 = 0.2 * quadratic_form;
     }
-    // std.debug.print("theta_m = {d}\n", .{theta_m});
 
     // αₘ ← √(secant_norm2 / quadratic_form)
     const alpha_m: f64 = @sqrt(secant_norm2 / quadratic_form);
-    // std.debug.print("alpha_m = {e}\n", .{alpha_m});
 
     // aₘ ← αₘ⋅Lₘᵀ⋅sₘ = αₘ⋅Rₘ⋅sₘ
     for (self.am, self.sm) |*am_i, sm_i| am_i.* = alpha_m * sm_i;
-    // std.debug.print("am = {e}\n", .{self.am});
 
     // ‖aₘ‖ ← √(rₘᵀ⋅sₘ)
     const secant_norm: f64 = @sqrt(secant_norm2);
-    // std.debug.print("secant_norm = {e}\n", .{secant_norm});
 
     // uₘ ← aₘ / ‖aₘ‖
     for (self.um, self.am) |*um_i, am_i| um_i.* = am_i / secant_norm;
-    // std.debug.print("um = {e}\n", .{self.um});
 
     // vₘ ← θₘ⋅yₘ
     for (self.vm, self.ym) |*vm_i, ym_i| vm_i.* = theta_m * ym_i;
@@ -389,55 +369,121 @@ fn iterate(self: *const @This()) !void {
 
     // vₘ ← vₘ / ‖aₘ‖
     for (self.vm) |*vm_i| vm_i.* /= secant_norm;
-    // std.debug.print("vm = {e}\n", .{self.vm});
 
     try self.Bm.update(self.um, self.vm);
-    // std.debug.print("Bm = {e}\n", .{self.Bm.matrix});
 
-    @memcpy(self.xm, self.xn); // copyto(self.xn, self.xm);
-    @memcpy(self.gm, self.gn); // copyto(self.gn, self.gm);
+    @memcpy(self.xm, self.xn);
+    @memcpy(self.gm, self.gn);
 
-    return;
+    return false;
 }
 
-test "BFGS.iterate #1" {
-    // Case: Example 9.2.2 in [1]
+const Rosenbrock = struct {
+    a: f64,
+    b: f64,
+
+    fn subfunc(self: *const Rosenbrock, x: f64, y: f64) f64 {
+        return pow2(self.a - x) + self.b * pow2(y - pow2(x));
+    }
+    fn func(self: *const Rosenbrock, x: []f64) f64 {
+        const n: usize = x.len;
+        var val: f64 = 0.0;
+        for (0..n - 1) |i| val += self.subfunc(x[i], x[i + 1]);
+        return val;
+    }
+
+    fn subgrad1(self: *const Rosenbrock, x: f64, y: f64) f64 {
+        return 2.0 * (x - self.a) + 4.0 * self.b * x * (pow2(x) - y);
+    }
+
+    fn subgrad2(self: *const Rosenbrock, x: f64, y: f64) f64 {
+        return 2.0 * self.b * (y - pow2(x));
+    }
+
+    fn grad(self: *const Rosenbrock, x: []f64, g: []f64) void {
+        const n: usize = x.len;
+        if (n != g.len) unreachable;
+        const m: usize = n - 1;
+
+        g[0] = self.subgrad1(x[0], x[1]);
+        for (1..m) |i| g[i] = self.subgrad1(x[i], x[i + 1]) + self.subgrad2(x[i - 1], x[i]);
+        g[m] = self.subgrad2(x[m - 1], x[m]);
+    }
+};
+
+test "BFGS Test Case: Rosenbrock's function 2D" {
     const page = std.testing.allocator;
 
-    var bfgs: @This() = .{ .df = ellipse_deriv };
-    try bfgs.init(page, 2);
-    defer bfgs.deinit(page);
-
-    inline for (.{ 1.0, 1.0 }, bfgs.xm) |v, *p| p.* = v;
-
-    inline for (.{ 0x1.deeea11683f49p+1, -0x1.11acee560242ap+0 }, bfgs.Bm.matrix[0]) |v, *p| p.* = v;
-    inline for (.{ 0x0.0000000000000p+0, 0x1.b0b80ef844ba1p+0 }, bfgs.Bm.matrix[1]) |v, *p| p.* = v;
-
-    for (0..13) |_| try bfgs.iterate();
-    // std.debug.print("{d}\n", .{bfgs.xm});
-
-    const y: [2]f64 = .{ 2.0, -1.0 };
-    try testing.expect(mem.eql(f64, &y, bfgs.xm));
-}
-
-test "BFGS.iterate #2" {
-    // Case: Rosenbrock's function
-    const page = std.testing.allocator;
-
-    var bfgs: @This() = .{ .df = rosenbrock_deriv };
-    try bfgs.init(page, 2);
+    const bfgs: *Self = try Self.init(page, 2);
     defer bfgs.deinit(page);
 
     inline for (.{ -1.2, 1.0 }, bfgs.xm) |v, *p| p.* = v;
 
-    try bfgs.firstStep(rosenbrock, rosenbrock_deriv);
-    std.debug.print("{d}, {d}\n", .{ bfgs.xm, rosenbrock(bfgs.xm) });
-    for (0..54) |_| {
-        try bfgs.iterate();
-        std.debug.print("{d}, {d}\n", .{ bfgs.xm, rosenbrock(bfgs.xm) });
-    }
+    const rosenbrock: Rosenbrock = .{ .a = 1.0, .b = 100.0 };
+
+    var terminated: bool = try bfgs.firstStep(rosenbrock, .{ .xtol = 1e-16, .gtol = 1e-16 });
+    // debug.print("{d}, {d}\n", .{ bfgs.xm, rosenbrock.func(bfgs.xm) });
+    while (!terminated) terminated = try bfgs.iterate(rosenbrock, .{ .xtol = 1e-16, .gtol = 1e-16 });
+    // debug.print("{d}, {d}\n", .{ bfgs.xm, rosenbrock.func(bfgs.xm) });
 
     const y: [2]f64 = .{ 1.0, 1.0 };
+    try testing.expect(mem.eql(f64, &y, bfgs.xm));
+}
+
+test "BFGS Test Case: Rosenbrock's function 3D" {
+    const page = std.testing.allocator;
+
+    const bfgs: *Self = try Self.init(page, 3);
+    defer bfgs.deinit(page);
+
+    inline for (.{ -1.2, -1.2, 1.0 }, bfgs.xm) |v, *p| p.* = v;
+
+    const rosenbrock: Rosenbrock = .{ .a = 1.0, .b = 100.0 };
+
+    var terminated: bool = try bfgs.firstStep(rosenbrock, .{ .xtol = 1e-16, .gtol = 1e-16 });
+    // debug.print("{d}, {d}\n", .{ bfgs.xm, rosenbrock.func(bfgs.xm) });
+    while (!terminated) terminated = try bfgs.iterate(rosenbrock, .{ .xtol = 1e-16, .gtol = 1e-16 });
+    // debug.print("{d}, {d}\n", .{ bfgs.xm, rosenbrock.func(bfgs.xm) });
+
+    const y: [3]f64 = .{ 1.0, 1.0, 1.0 };
+    try testing.expect(mem.eql(f64, &y, bfgs.xm));
+}
+
+test "BFGS Test Case: Rosenbrock's function 4D" {
+    const page = std.testing.allocator;
+
+    const bfgs: *Self = try Self.init(page, 4);
+    defer bfgs.deinit(page);
+
+    inline for (.{ -1.2, -1.2, -1.2, 1.0 }, bfgs.xm) |v, *p| p.* = v;
+
+    const rosenbrock: Rosenbrock = .{ .a = 1.0, .b = 100.0 };
+
+    var terminated: bool = try bfgs.firstStep(rosenbrock, .{ .xtol = 1e-16, .gtol = 1e-16 });
+    // debug.print("{d}, {d}\n", .{ bfgs.xm, rosenbrock.func(bfgs.xm) });
+    while (!terminated) terminated = try bfgs.iterate(rosenbrock, .{ .xtol = 1e-16, .gtol = 1e-16 });
+    // debug.print("{d}, {d}\n", .{ bfgs.xm, rosenbrock.func(bfgs.xm) });
+
+    const y: [4]f64 = .{ 1.0, 1.0, 1.0, 1.0 };
+    try testing.expect(mem.eql(f64, &y, bfgs.xm));
+}
+
+test "BFGS Test Case: Rosenbrock's function 5D" {
+    const page = std.testing.allocator;
+
+    const bfgs: *Self = try Self.init(page, 5);
+    defer bfgs.deinit(page);
+
+    inline for (.{ -1.2, -1.2, -1.2, -1.2, 1.0 }, bfgs.xm) |v, *p| p.* = v;
+
+    const rosenbrock: Rosenbrock = .{ .a = 1.0, .b = 100.0 };
+
+    var terminated: bool = try bfgs.firstStep(rosenbrock, .{ .xtol = 1e-16, .gtol = 1e-16 });
+    // debug.print("{d}, {d}\n", .{ bfgs.xm, rosenbrock.func(bfgs.xm) });
+    while (!terminated) terminated = try bfgs.iterate(rosenbrock, .{ .xtol = 1e-16, .gtol = 1e-16 });
+    // debug.print("{d}, {d}\n", .{ bfgs.xm, rosenbrock.func(bfgs.xm) });
+
+    const y: [5]f64 = .{ 1.0, 1.0, 1.0, 1.0, 1.0 };
     try testing.expect(mem.eql(f64, &y, bfgs.xm));
 }
 
@@ -445,9 +491,17 @@ const Hess = struct {
     buffer: []f64 = undefined,
     matrix: [][]f64 = undefined,
 
+    const slice_al: comptime_int = @alignOf([]f64);
+    const child_al: comptime_int = @alignOf(f64);
+    const slice_sz: comptime_int = @sizeOf(usize) * 2;
+    const child_sz: comptime_int = @sizeOf(f64);
+
     const HessError = error{SingularError};
 
-    fn init(self: *Hess, allocator: mem.Allocator, n: usize) AllocError!void {
+    fn init(allocator: mem.Allocator, n: usize) AllocError!*Hess {
+        const self: *Hess = try allocator.create(Hess);
+        errdefer allocator.destroy(self);
+
         self.buffer = try allocator.alloc(f64, n);
         errdefer allocator.free(self.buffer);
 
@@ -469,7 +523,7 @@ const Hess = struct {
             padding += chunk_sz;
         }
 
-        return;
+        return self;
     }
 
     fn deinit(self: *const Hess, allocator: mem.Allocator) void {
@@ -480,10 +534,10 @@ const Hess = struct {
         allocator.free(self.buffer);
         allocator.free(ptr[0..len]);
 
-        return;
+        allocator.destroy(self);
     }
 
-    fn update(self: *Hess, u: []f64, v: []f64) HessError!void {
+    fn update(self: *const Hess, u: []f64, v: []f64) HessError!void {
         const n: usize = u.len;
         if (n != v.len) unreachable;
 
@@ -502,9 +556,9 @@ const Hess = struct {
             if (self.buffer[i] == 0.0) {
                 self.buffer[i] = @abs(self.buffer[i + 1]);
             } else if (@abs(self.buffer[i]) > @abs(self.buffer[i + 1])) {
-                self.buffer[i] = @abs(self.buffer[i]) * @sqrt(1.0 + pow2(f64, self.buffer[i + 1] / self.buffer[i]));
+                self.buffer[i] = @abs(self.buffer[i]) * @sqrt(1.0 + pow2(self.buffer[i + 1] / self.buffer[i]));
             } else {
-                self.buffer[i] = @abs(self.buffer[i + 1]) * @sqrt(1.0 + pow2(f64, self.buffer[i] / self.buffer[i + 1]));
+                self.buffer[i] = @abs(self.buffer[i + 1]) * @sqrt(1.0 + pow2(self.buffer[i] / self.buffer[i + 1]));
             }
 
             if (i == 0) break;
@@ -519,11 +573,9 @@ const Hess = struct {
             rotate(self.matrix, j, n, self.matrix[j][j], -self.matrix[jp1][j]);
         }
 
-        for (self.matrix, 0..n) |R_j, j| {
+        for (self.matrix, 0..) |R_j, j| {
             if (R_j[j] == 0.0) return HessError.SingularError;
         }
-
-        return;
     }
 
     fn rotate(R: [][]f64, i: usize, n: usize, a: f64, b: f64) void {
@@ -552,8 +604,6 @@ const Hess = struct {
             R_ij.* = c * y - s * w;
             R_ip1j.* = s * y + c * w;
         }
-
-        return;
     }
 
     // Cholesky
@@ -587,8 +637,6 @@ const Hess = struct {
             x[i] = t / self.matrix[i][i];
             if (i == 0) break;
         }
-
-        return;
     }
 
     fn dtrmv(self: *Hess, x: []f64) void {
@@ -600,15 +648,13 @@ const Hess = struct {
             }
             x_i.* = temp;
         }
-        return;
     }
 };
 
 test "Hess.update" {
     const page = std.testing.allocator;
 
-    var hess: Hess = .{};
-    try hess.init(page, 3);
+    const hess: *Hess = try Hess.init(page, 3);
     defer hess.deinit(page);
 
     inline for (.{ 2.0, 6.0, 8.0 }, hess.matrix[0]) |val, *ptr| ptr.* = val;
@@ -640,8 +686,7 @@ test "Hess.update" {
 test "(RᵀR)⋅x = b" {
     const page = std.testing.allocator;
 
-    var hess: Hess = .{};
-    try hess.init(page, 3);
+    const hess: *Hess = try Hess.init(page, 3);
     defer hess.deinit(page);
 
     inline for (.{ 2.0, 6.0, 8.0 }, hess.matrix[0]) |val, *ptr| ptr.* = val;
@@ -664,17 +709,6 @@ test "(RᵀR)⋅x = b" {
     };
 
     try testing.expect(mem.eql(f64, &y, x));
-}
-
-fn copyto(src: []f64, des: []f64) void {
-    const n: usize = src.len;
-    if (n != des.len) unreachable;
-
-    for (src, des) |src_i, *des_i| {
-        des_i.* = src_i;
-    }
-
-    return;
 }
 
 fn dot(x: []f64, y: []f64) f64 {
@@ -715,20 +749,8 @@ fn dot(x: []f64, y: []f64) f64 {
     return t;
 }
 
-fn ellipse_deriv(x: []f64, g: []f64) void {
-    g[0] = 4 * pow3(f64, x[0] - 2) + 2 * (x[0] - 2) * pow2(f64, x[1]);
-    g[1] = 2 * pow2(f64, x[0] - 2) * x[1] + 2 * (x[1] + 1);
-    return;
-}
-
-fn rosenbrock(x: []f64) f64 {
-    return pow2(f64, 1.0 - x[0]) + 100.0 * pow2(f64, x[1] - pow2(f64, x[0]));
-}
-
-fn rosenbrock_deriv(x: []f64, g: []f64) void {
-    g[0] = -400 * x[0] * (x[1] - pow2(f64, x[0])) - 2 * (1 - x[0]);
-    g[1] = 200 * (x[1] - pow2(f64, x[0]));
-    return;
+fn pow2(x: f64) f64 {
+    return x * x;
 }
 
 const std = @import("std");
@@ -736,7 +758,3 @@ const mem = std.mem;
 const math = std.math;
 const debug = std.debug;
 const testing = std.testing;
-
-const poly = @import("./poly.zig");
-const pow2 = poly.pow2;
-const pow3 = poly.pow3;
