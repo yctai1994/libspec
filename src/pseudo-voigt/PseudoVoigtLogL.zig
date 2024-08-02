@@ -1,4 +1,5 @@
 //! Pseudo-Voigt Log-Likelihood
+xvec: []f64,
 tape: []f64,
 value: f64, // logL
 deriv_out: []f64, // [ dy/dlogPv₁, dy/dlogPv₂, … ]
@@ -7,13 +8,17 @@ width: *PseudoVoigtWidth,
 cdata: *CenteredData,
 pvoigt: *PseudoVoigt,
 
+solver: *BFGS,
+
 const Self: type = @This();
 
-fn init(allocator: mem.Allocator, wvec: []f64) !*Self {
+fn init(allocator: mem.Allocator, xvec: []f64, wvec: []f64) !*Self {
     const self = try allocator.create(Self);
     errdefer allocator.destroy(self);
 
     const n: usize = wvec.len;
+
+    self.xvec = xvec;
 
     self.tape = try allocator.alloc(f64, 5 * n + 6);
     errdefer allocator.free(self.tape);
@@ -25,16 +30,21 @@ fn init(allocator: mem.Allocator, wvec: []f64) !*Self {
     errdefer self.cdata.deinit(allocator);
 
     self.pvoigt = try PseudoVoigt.init(allocator, self.cdata, self.width, self.tape, n);
+    errdefer self.pvoigt.deinit(allocator);
+
+    self.solver = try BFGS.init(allocator, 3);
 
     @memset(self.tape[n..], 1.0);
 
     self.deriv_out = self.tape[0..n];
-    for (self.deriv_out, wvec) |*p, v| p.* = v; // dy/dlogPvᵢ = wᵢ when y = logL
+    for (self.deriv_out, wvec) |*p, v| p.* = -v; // dy/dlogPvᵢ = wᵢ when y = logL
 
     return self;
 }
 
 fn deinit(self: *Self, allocator: mem.Allocator) void {
+    self.solver.deinit(allocator);
+
     self.pvoigt.deinit(allocator);
     self.cdata.deinit(allocator);
     self.width.deinit(allocator);
@@ -43,8 +53,8 @@ fn deinit(self: *Self, allocator: mem.Allocator) void {
     allocator.destroy(self);
 }
 
-fn forward(self: *Self, xvec: []f64, mode: f64, sigma: f64, gamma: f64) void {
-    self.cdata.forward(xvec, mode);
+fn forward(self: *Self, mode: f64, sigma: f64, gamma: f64) void {
+    self.cdata.forward(self.xvec, mode);
     self.width.forward(sigma, gamma);
     self.pvoigt.forward();
 
@@ -59,6 +69,16 @@ fn backward(self: *Self, deriv_out: []f64) void {
     self.pvoigt.backward();
     self.cdata.backward(deriv_out);
     self.width.backward(deriv_out);
+}
+
+fn func(self: *Self, x: []f64) f64 {
+    self.forward(self.xvec, x[0], x[1], x[2]);
+    return self.value;
+}
+
+fn grad(self: *Self, x: []f64, g: []f64) void {
+    self.forward(self.xvec, x[0], x[1], x[2]);
+    self.backward(g);
 }
 
 test "PseudoVoigtLogL: forward & backward" {
@@ -103,13 +123,13 @@ test "PseudoVoigtLogL: forward & backward" {
     const dest: []f64 = try page.alloc(f64, 3);
     defer page.free(dest);
 
-    self.forward(xvec, test_mode, test_sigma, test_gamma);
+    self.forward(test_mode, test_sigma, test_gamma);
     self.backward(dest);
 
-    try testing.expectApproxEqRel(-0x1.46f9bbe34e92fp+1, self.value, 4e-16);
-    try testing.expectApproxEqRel(-0x1.55430572f2e75p-3, dest[0], 2e-16);
-    try testing.expectApproxEqRel(0x1.ec76cbe9ae12dp-8, dest[1], 9e-15);
-    try testing.expectApproxEqRel(-0x1.ff4ac03304d78p-5, dest[2], 8e-16);
+    try testing.expectApproxEqRel(self.value, 0x1.46f9bbe34e92fp+1, 4e-16);
+    try testing.expectApproxEqRel(dest[0], 0x1.55430572f2e75p-3, 2e-16);
+    try testing.expectApproxEqRel(dest[1], -0x1.ec76cbe9ae12dp-8, 9e-15);
+    try testing.expectApproxEqRel(dest[2], 0x1.ff4ac03304d78p-5, 8e-16);
 }
 
 const test_mode: comptime_float = 0.878;
@@ -118,8 +138,11 @@ const test_gamma: comptime_float = 1.305;
 
 const std = @import("std");
 const mem = std.mem;
+const math = std.math;
 const testing = std.testing;
 
 const PseudoVoigt = @import("./PseudoVoigt.zig");
 const CenteredData = @import("./CenteredData.zig");
 const PseudoVoigtWidth = @import("./PseudoVoigtWidth.zig");
+
+const BFGS = @import("../BFGS.zig");
