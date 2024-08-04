@@ -87,15 +87,13 @@ fn search(self: *const Self, obj: anytype) void {
     const c1: comptime_float = 1e-4;
     const c2: comptime_float = 0.9;
 
-    const amax: comptime_float = 1.0;
+    const amax: comptime_float = 65536.0;
     const amin: comptime_float = 0.0;
 
     const phi_0: f64 = obj.func(self.xm); // ϕ(0) = f(xₘ)
     obj.grad(self.xm, self.gm); // ∇f(xₘ)
     for (self.sm, self.gm) |*p, d| p.* = -d; // pₘ ← -∇f(xₘ)
     const dphi_0: f64 = dot(self.sm, self.gm); // ϕ'(0) = pₘᵀ⋅∇f(xₘ)
-
-    // debug.print("phi_0 = {d}, dphi_0 = {d}\n", .{ phi_0, dphi_0 });
 
     if (0.0 < dphi_0) unreachable;
 
@@ -104,54 +102,37 @@ fn search(self: *const Self, obj: anytype) void {
     var dphi: f64 = undefined;
 
     var a_old: f64 = amin;
-    var a: f64 = 0.5 * (amin + amax);
+    var a: f64 = 0.1; // * (amin + amax);
 
     var iter: usize = 0;
 
-    while (iter < 20) : (iter += 1) {
+    // while (iter < 10) : (iter += 1) {
+    while (a < amax) : (iter += 1) {
+        debug.print("jump: a = {d}\n", .{a});
         for (self.xn, self.xm, self.sm) |*xn_i, xm_i, sm_i| xn_i.* = xm_i + a * sm_i; // xₜ ← xₘ + α⋅pₘ
         phi = obj.func(self.xn); // ϕ(α) = f(xₘ + α⋅pₘ)
 
         // Test Wolfe conditions
         if ((phi > phi_0 + c1 * a * dphi_0) or (iter > 0 and phi > phi_old)) {
+            debug.print("jump: phase 1\n", .{});
             return self.zoom(a_old, a, phi_0, dphi_0, obj);
         }
 
         obj.grad(self.xn, self.gn); // ∇f(xₘ + α⋅pₘ)
         dphi = dot(self.sm, self.gn); // ϕ'(α) = pₘᵀ⋅∇f(xₘ + α⋅pₘ)
 
-        // debug.print("phi = {d}, dphi = {d}, a = {d}\n", .{ phi, dphi, a });
-
         if (@abs(dphi) <= -c2 * dphi_0) break; // return a;
-        if (0.0 <= dphi) return self.zoom(a, a_old, phi_0, dphi_0, obj);
+        if (0.0 <= dphi) {
+            debug.print("jump: phase 2\n", .{});
+            return self.zoom(a, a_old, phi_0, dphi_0, obj);
+        }
 
+        debug.print("jump: phase 3\n", .{});
         a_old = a;
         phi_old = phi;
-        a = 0.5 * (a + amax);
-    } else {
-        iter = 0;
-        while (iter < 30) : (iter += 1) {
-            for (self.xn, self.xm, self.sm) |*xn_i, xm_i, sm_i| xn_i.* = xm_i + a * sm_i; // xₜ ← xₘ + α⋅pₘ
-            phi = obj.func(self.xn); // ϕ(α) = f(xₘ + α⋅pₘ)
-
-            // Test Wolfe conditions
-            if ((phi > phi_0 + c1 * a * dphi_0) or (iter > 0 and phi > phi_old)) {
-                return self.zoom(a_old, a, phi_0, dphi_0, obj);
-            }
-
-            obj.grad(self.xn, self.gn); // ∇f(xₘ + α⋅pₘ)
-            dphi = dot(self.sm, self.gn); // ϕ'(α) = pₘᵀ⋅∇f(xₘ + α⋅pₘ)
-
-            // debug.print("phi = {d}, dphi = {d}, a = {d}\n", .{ phi, dphi, a });
-
-            if (@abs(dphi) <= -c2 * dphi_0) break; // return a;
-            if (0.0 <= dphi) return self.zoom(a, a_old, phi_0, dphi_0, obj);
-
-            a_old = a;
-            phi_old = phi;
-            a *= 2.0;
-        } else unreachable;
-    }
+        a *= 2.0;
+        // a = 0.5 * (a + amax);
+    } else unreachable;
 }
 
 // it's possible that a_lb > a_rb
@@ -178,49 +159,60 @@ fn zoom(self: *const Self, a_lb: f64, a_rb: f64, phi_0: f64, dphi_0: f64, obj: a
     obj.grad(self.xn, self.gn); // ∇f(xₘ + α_lo⋅pₘ)
     phi_lo = obj.func(self.xn); // ϕ(α_lo) = f(xₘ + α_lo⋅pₘ)
     dphi_lo = dot(self.sm, self.gn); // ϕ'(α_lo) = pₘᵀ⋅∇f(xₘ + α_lo⋅pₘ)
+    debug.print("a_lo = {d}: xn = {d}, xm = {d}\n", .{ a_lo, self.xn, self.xm });
 
     for (self.xn, self.xm, self.sm) |*x_hi, xm_i, sm_i| x_hi.* = xm_i + a_hi * sm_i; // xₜ ← xₘ + α_hi⋅pₘ
     obj.grad(self.xn, self.gn); // ∇f(xₘ + α_hi⋅pₘ)
     phi_hi = obj.func(self.xn); // ϕ(α_hi) = f(xₘ + α_hi⋅pₘ)
     dphi_hi = dot(self.sm, self.gn); // ϕ'(α_hi) = pₘᵀ⋅∇f(xₘ + α_hi⋅pₘ), ϕ'(α_hi) can be positive
+    debug.print("a_hi = {d}: xn = {d}, xm = {d}\n", .{ a_hi, self.xn, self.xm });
 
-    while (iter < 100) : (iter += 1) {
+    while (iter < 10) : (iter += 1) {
         // Interpolate α
         a = if (a_lo < a_hi)
             interpolate(a_lo, a_hi, phi_lo, phi_hi, dphi_lo, dphi_hi)
         else
             interpolate(a_hi, a_lo, phi_hi, phi_lo, dphi_hi, dphi_lo);
 
+        debug.print("zoom: a_lo = {d}, a_hi = {d}, a = {d}\n", .{ a_lo, a_hi, a });
         for (self.xn, self.xm, self.sm) |*xn_i, xm_i, sm_i| xn_i.* = xm_i + a * sm_i; // xₜ ← xₘ + α⋅pₘ
         phi = obj.func(self.xn); // ϕ(α) = f(xₘ + α⋅pₘ)
         obj.grad(self.xn, self.gn); // ∇f(xₘ + α⋅pₘ)
         dphi = dot(self.sm, self.gn); // ϕ'(α) = pₘᵀ⋅∇f(xₘ + α⋅pₘ)
 
         if ((phi > phi_0 + c1 * a * dphi_0) or (phi > phi_lo)) {
+            debug.print("zoom: phase 1\n", .{});
             a_hi = a;
             phi_hi = phi;
             dphi_hi = dphi;
         } else {
             if (@abs(dphi) <= -c2 * dphi_0) break; // return a;
             if (0.0 <= dphi * (a_hi - a_lo)) {
+                debug.print("zoom: phase 2\n", .{});
                 a_hi = a_lo;
                 phi_hi = phi_lo;
                 dphi_hi = dphi_lo;
             }
 
+            debug.print("zoom: phase 3\n", .{});
             a_lo = a;
             phi_lo = phi;
             dphi_lo = dphi;
         }
-    } // else unreachable;
+    } else unreachable;
 }
 
 fn interpolate(a_old: f64, a_now: f64, phi_old: f64, phi_now: f64, dphi_old: f64, dphi_now: f64) f64 {
     if (!(a_old < a_now)) unreachable;
+    debug.print(
+        "a_old = {d}, a_now = {d}, phi_old = {d}, phi_now = {d}, dphi_old = {d}, dphi_now = {d}\n",
+        .{ a_old, a_now, phi_old, phi_now, dphi_old, dphi_now },
+    );
     const d1: f64 = dphi_old + dphi_now - 3.0 * (phi_old - phi_now) / (a_old - a_now);
     const d2: f64 = @sqrt(d1 * d1 - dphi_old * dphi_now);
     const nu: f64 = dphi_now + d2 - d1;
     const de: f64 = dphi_now - dphi_old + 2.0 * d2;
+    debug.print("d1 = {d}, d2 = {d}, nu = {d}, de = {d}\n", .{ d1, d2, nu, de });
     return a_now - (a_now - a_old) * (nu / de);
 }
 
@@ -634,19 +626,21 @@ const Hess = struct {
         }
 
         // Transform R + u⋅vᵀ to upper Hessenberg.
-        var i: usize = k - 1;
-        while (0 <= i) : (i -= 1) {
-            rotate(self.matrix, i, n, self.buffer[i], -self.buffer[i + 1]);
+        if (0 < k) {
+            var i: usize = k - 1;
+            while (0 <= i) : (i -= 1) {
+                rotate(self.matrix, i, n, self.buffer[i], -self.buffer[i + 1]);
 
-            if (self.buffer[i] == 0.0) {
-                self.buffer[i] = @abs(self.buffer[i + 1]);
-            } else if (@abs(self.buffer[i]) > @abs(self.buffer[i + 1])) {
-                self.buffer[i] = @abs(self.buffer[i]) * @sqrt(1.0 + pow2(self.buffer[i + 1] / self.buffer[i]));
-            } else {
-                self.buffer[i] = @abs(self.buffer[i + 1]) * @sqrt(1.0 + pow2(self.buffer[i] / self.buffer[i + 1]));
+                if (self.buffer[i] == 0.0) {
+                    self.buffer[i] = @abs(self.buffer[i + 1]);
+                } else if (@abs(self.buffer[i]) > @abs(self.buffer[i + 1])) {
+                    self.buffer[i] = @abs(self.buffer[i]) * @sqrt(1.0 + pow2(self.buffer[i + 1] / self.buffer[i]));
+                } else {
+                    self.buffer[i] = @abs(self.buffer[i + 1]) * @sqrt(1.0 + pow2(self.buffer[i] / self.buffer[i + 1]));
+                }
+
+                if (i == 0) break;
             }
-
-            if (i == 0) break;
         }
 
         for (self.matrix[0], v) |*R_0i, v_i| {
