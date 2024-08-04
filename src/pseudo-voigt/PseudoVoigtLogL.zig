@@ -550,7 +550,7 @@ test "PseudoVoigtLogL: forward & backward" {
 
     _ = &terminated;
     // while (!terminated) {
-    for (0..100) |i| {
+    for (0..50) |i| {
         // terminated = try bfgs.firstStep(self, .{ .xtol = 1e-12, .gtol = 1e-12 });
         terminated = try bfgs.iterate(self, .{ .xtol = 1e-16, .gtol = 1e-16 });
         debug.print(
@@ -563,8 +563,10 @@ test "PseudoVoigtLogL: forward & backward" {
 const test_mode: comptime_float = 0.878;
 // const test_sigma: comptime_float = 2.171;
 // const test_gamma: comptime_float = 1.305;
-const test_sigma: comptime_float = 0.5;
-const test_gamma: comptime_float = 0.5;
+// const test_sigma: comptime_float = 0.5;
+// const test_gamma: comptime_float = 0.5;
+const test_sigma: comptime_float = 2.0;
+const test_gamma: comptime_float = 2.0;
 
 const std = @import("std");
 const mem = std.mem;

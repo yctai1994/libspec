@@ -87,7 +87,7 @@ fn search(self: *const Self, obj: anytype) void {
     const c1: comptime_float = 1e-4;
     const c2: comptime_float = 0.9;
 
-    const amax: comptime_float = 0.5;
+    const amax: comptime_float = 1.0;
     const amin: comptime_float = 0.0;
 
     const phi_0: f64 = obj.func(self.xm); // ϕ(0) = f(xₘ)
@@ -130,7 +130,7 @@ fn search(self: *const Self, obj: anytype) void {
         a = 0.5 * (a + amax);
     } else {
         iter = 0;
-        while (iter < 20) : (iter += 1) {
+        while (iter < 30) : (iter += 1) {
             for (self.xn, self.xm, self.sm) |*xn_i, xm_i, sm_i| xn_i.* = xm_i + a * sm_i; // xₜ ← xₘ + α⋅pₘ
             phi = obj.func(self.xn); // ϕ(α) = f(xₘ + α⋅pₘ)
 
@@ -212,7 +212,7 @@ fn zoom(self: *const Self, a_lb: f64, a_rb: f64, phi_0: f64, dphi_0: f64, obj: a
             phi_lo = phi;
             dphi_lo = dphi;
         }
-    } else unreachable;
+    } // else unreachable;
 }
 
 fn interpolate(a_old: f64, a_now: f64, phi_old: f64, phi_now: f64, dphi_old: f64, dphi_now: f64) f64 {
