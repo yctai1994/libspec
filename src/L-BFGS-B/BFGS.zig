@@ -85,9 +85,9 @@ pub fn deinit(self: *const Self, allocator: mem.Allocator) void {
 
 fn search(self: *const Self, obj: anytype) void {
     const c1: comptime_float = 1e-4;
-    const c2: comptime_float = 0.1;
+    const c2: comptime_float = 0.9;
 
-    const amax: comptime_float = 0.5;
+    const amax: comptime_float = 65536.0;
     const amin: comptime_float = 0.0;
 
     const phi_0: f64 = obj.func(self.xm); // ϕ(0) = f(xₘ)
@@ -102,11 +102,12 @@ fn search(self: *const Self, obj: anytype) void {
     var dphi: f64 = undefined;
 
     var a_old: f64 = amin;
-    var a: f64 = 0.5 * (amin + amax);
+    var a: f64 = 1e-3; // * (amin + amax);
 
     var iter: usize = 0;
 
-    while (iter < 10) : (iter += 1) {
+    // while (iter < 10) : (iter += 1) {
+    while (a < amax) : (iter += 1) {
         for (self.xn, self.xm, self.sm) |*xn_i, xm_i, sm_i| xn_i.* = xm_i + a * sm_i; // xₜ ← xₘ + α⋅pₘ
         phi = obj.func(self.xn); // ϕ(α) = f(xₘ + α⋅pₘ)
 
@@ -123,13 +124,14 @@ fn search(self: *const Self, obj: anytype) void {
 
         a_old = a;
         phi_old = phi;
-        a = 0.5 * (a + amax);
+        a *= 2.0;
+        // a = 0.5 * (a + amax);
     } else unreachable;
 }
 
 // it's possible that a_lb > a_rb
 fn zoom(self: *const Self, a_lb: f64, a_rb: f64, phi_0: f64, dphi_0: f64, obj: anytype) void {
-    const c1: comptime_float = 1e-3;
+    const c1: comptime_float = 1e-4;
     const c2: comptime_float = 0.9;
 
     var phi_lo: f64 = undefined;
@@ -322,7 +324,31 @@ fn iterate(self: *const Self, obj: anytype, comptime term: Termination) !bool {
 
     // secant_norm2 ← yₘᵀ⋅sₘ
     var secant_norm2: f64 = dot(self.ym, self.sm);
-    if (secant_norm2 <= 0.0) unreachable;
+    if (secant_norm2 <= 0.0) { // unreachable;
+        debug.print(" \x1b[31mnan: yₘᵀ⋅sₘ <= 0.0, use line search\x1b[0m\n", .{});
+        // return self.firstStep(obj, term);
+        // xₙ ← xₘ + α⋅pₘ
+        self.search(obj);
+
+        // gₙ ← ∇f(xₙ)
+        obj.grad(self.xn, self.gn);
+
+        // sₘ ← xₙ - xₘ
+        for (self.sm, self.xn, self.xm) |*sm_i, xn_i, xm_i| sm_i.* = xn_i - xm_i;
+        snrm = 0.0;
+        for (self.sm) |sm_i| snrm += pow2(sm_i);
+        snrm = @sqrt(snrm);
+        // if (snrm <= xtol) return true;
+
+        // yₘ ← ∇f(xₙ) - ∇f(xₘ) = gₙ - gₘ
+        for (self.ym, self.gn, self.gm) |*ym_i, gn_i, gm_i| ym_i.* = gn_i - gm_i;
+        ymax = 0.0;
+        for (self.ym) |ym_i| ymax = @max(ymax, @abs(ym_i));
+        // if (ymax <= gtol) return true;
+
+        // secant_norm2 ← yₘᵀ⋅sₘ
+        secant_norm2 = dot(self.ym, self.sm);
+    }
 
     // sₘ ← Lₘᵀ⋅sₘ = Rₘ⋅sₘ
     self.Bm.dtrmv(self.sm);
@@ -422,9 +448,11 @@ test "BFGS Test Case: Rosenbrock's function 2D" {
     const rosenbrock: Rosenbrock = .{ .a = 1.0, .b = 100.0 };
 
     var terminated: bool = try bfgs.firstStep(rosenbrock, .{ .xtol = 1e-16, .gtol = 1e-16 });
-    // debug.print("{d}, {d}\n", .{ bfgs.xm, rosenbrock.func(bfgs.xm) });
-    while (!terminated) terminated = try bfgs.iterate(rosenbrock, .{ .xtol = 1e-16, .gtol = 1e-16 });
-    // debug.print("{d}, {d}\n", .{ bfgs.xm, rosenbrock.func(bfgs.xm) });
+    debug.print("{d}, {d}\n", .{ bfgs.xm, rosenbrock.func(bfgs.xm) });
+    while (!terminated) {
+        terminated = try bfgs.iterate(rosenbrock, .{ .xtol = 1e-16, .gtol = 1e-16 });
+        debug.print("{d}, {d}\n", .{ bfgs.xm, rosenbrock.func(bfgs.xm) });
+    }
 
     const y: [2]f64 = .{ 1.0, 1.0 };
     try testing.expect(mem.eql(f64, &y, bfgs.xm));
@@ -549,19 +577,21 @@ const Hess = struct {
         }
 
         // Transform R + u⋅vᵀ to upper Hessenberg.
-        var i: usize = k - 1;
-        while (0 <= i) : (i -= 1) {
-            rotate(self.matrix, i, n, self.buffer[i], -self.buffer[i + 1]);
+        if (0 < k) {
+            var i: usize = k - 1;
+            while (0 <= i) : (i -= 1) {
+                rotate(self.matrix, i, n, self.buffer[i], -self.buffer[i + 1]);
 
-            if (self.buffer[i] == 0.0) {
-                self.buffer[i] = @abs(self.buffer[i + 1]);
-            } else if (@abs(self.buffer[i]) > @abs(self.buffer[i + 1])) {
-                self.buffer[i] = @abs(self.buffer[i]) * @sqrt(1.0 + pow2(self.buffer[i + 1] / self.buffer[i]));
-            } else {
-                self.buffer[i] = @abs(self.buffer[i + 1]) * @sqrt(1.0 + pow2(self.buffer[i] / self.buffer[i + 1]));
+                if (self.buffer[i] == 0.0) {
+                    self.buffer[i] = @abs(self.buffer[i + 1]);
+                } else if (@abs(self.buffer[i]) > @abs(self.buffer[i + 1])) {
+                    self.buffer[i] = @abs(self.buffer[i]) * @sqrt(1.0 + pow2(self.buffer[i + 1] / self.buffer[i]));
+                } else {
+                    self.buffer[i] = @abs(self.buffer[i + 1]) * @sqrt(1.0 + pow2(self.buffer[i] / self.buffer[i + 1]));
+                }
+
+                if (i == 0) break;
             }
-
-            if (i == 0) break;
         }
 
         for (self.matrix[0], v) |*R_0i, v_i| {
