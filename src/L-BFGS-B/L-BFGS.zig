@@ -17,11 +17,14 @@ Ym: [][]f64, // [ y(k-1), y(k-2), …, y(k-m) ]
 const Self: type = @This();
 
 const Options = struct {
-    capacity: ?usize = null,
+    nmax: ?usize = null,
+    xtol: ?f64 = null,
+    gtol: ?f64 = null,
+    kmax: usize = 100,
 };
 
 fn init(allocator: mem.Allocator, n: usize, comptime opt: Options) AllocError!*Self {
-    const capacity: comptime_int = opt.capacity orelse 30;
+    const nmax: comptime_int = opt.nmax orelse 30;
     const ArrF64 = Array(f64){ .allocator = allocator };
 
     const self: *Self = try allocator.create(Self);
@@ -42,16 +45,16 @@ fn init(allocator: mem.Allocator, n: usize, comptime opt: Options) AllocError!*S
     self.pm = try ArrF64.vector(n);
     errdefer ArrF64.free(self.pm);
 
-    self.rs = try ArrF64.vector(capacity);
+    self.rs = try ArrF64.vector(nmax);
     errdefer ArrF64.free(self.rs);
 
-    self.as = try ArrF64.vector(capacity);
+    self.as = try ArrF64.vector(nmax);
     errdefer ArrF64.free(self.as);
 
-    self.Sm = try ArrF64.matrix(capacity, n);
+    self.Sm = try ArrF64.matrix(nmax, n);
     errdefer ArrF64.free(self.Sm);
 
-    self.Ym = try ArrF64.matrix(capacity, n);
+    self.Ym = try ArrF64.matrix(nmax, n);
 
     return self;
 }
@@ -100,7 +103,7 @@ fn search(self: *const Self, obj: anytype, comptime param: StrongWolfe) LineSear
     var g_now: f64 = undefined;
 
     var a_old: f64 = param.a_min;
-    var a_now: f64 = 1e-4;
+    var a_now: f64 = 1e-1;
 
     var iter: usize = 0;
 
@@ -182,7 +185,7 @@ fn zoom(self: *const Self, a_lb: f64, a_rb: f64, f0: f64, g0: f64, obj: anytype,
             f_lo = f_now;
             g_lo = g_now;
         }
-    } else return LineSearchError.ZoomError;
+    }
 }
 
 // Equation 3.59 in [1]
@@ -200,137 +203,135 @@ fn interpolate(a_old: f64, a_new: f64, f_old: f64, f_new: f64, g_old: f64, g_new
 //
 
 fn solve(self: *const Self, obj: anytype, comptime opt: Options) !void {
-    const capacity: comptime_int = opt.capacity orelse 30;
-    var k: usize = 0;
+    const nmax: comptime_int = opt.nmax orelse 30;
+    const xtol: comptime_float = comptime opt.xtol orelse math.floatEps(f64);
+    const gtol: comptime_float = comptime opt.gtol orelse math.floatEps(f64);
 
-    // 1st Step:
-    //     x₀ := self.xm, ∇f(x₀) := self.gm
-    //     x₁ := self.xn, ∇f(x₁) := self.gn
+    var kdx: usize = 0;
+    var idx: usize = undefined;
+    var rho: f64 = undefined;
+    var snrm: f64 = undefined;
+    var ymax: f64 = undefined;
+    var diag: f64 = undefined;
+    var beta: f64 = undefined;
 
     obj.grad(self.xm, self.gm); // gₘ ← ∇f(x₀)
     for (self.pm, self.gm) |*p, g| p.* = -g; // pₘ ← p₀ = -∇f(x₀)
 
     try self.search(obj, .{}); // x₁ ← x₀ + α⋅p₀, gₙ ← ∇f(x₁)
     for (self.Sm[0], self.xn, self.xm) |*s_i, xn_i, xm_i| s_i.* = xn_i - xm_i; // s₀ ← x₁ - x₀
+
+    snrm = 0.0;
+    for (self.Sm[0]) |s_i| snrm += pow2(s_i);
+    snrm = @sqrt(snrm);
+    if (snrm <= xtol) return;
+
     for (self.Ym[0], self.gn, self.gm) |*y_i, gn_i, gm_i| y_i.* = gn_i - gm_i; // y₀ ← ∇f(x₁) - ∇f(x₀)
-    self.rs[0] = blk: {
-        const rho: f64 = 1.0 / dot(self.Sm[0], self.Ym[0]); // ρ₀ ← 1.0 / s₀ᵀ⋅y₀
-        if (rho <= 0.0) unreachable;
-        break :blk rho;
-    };
+
+    ymax = 0.0;
+    for (self.Ym[0]) |y_i| ymax = @max(ymax, @abs(y_i));
+    if (ymax <= gtol) return;
+
+    rho = 1.0 / dot(self.Sm[0], self.Ym[0]); // ρ₀ ← 1.0 / s₀ᵀ⋅y₀
+    if (rho <= 0.0) return LineSearchError.ZoomError;
+    self.rs[0] = rho;
 
     @memcpy(self.xm, self.xn); // xₘ ← x₁
     @memcpy(self.gm, self.gn); // gₘ ← ∇f(x₁)
 
-    k += 1;
+    kdx += 1;
 
-    while (k < capacity) : (k += 1) {
-        // 2nd Step:
-        //     x₁ := self.xm, ∇f(x₁) := self.gm
-        //     x₂ := self.xn, ∇f(x₂) := self.gn
-
+    while (kdx < nmax) : (kdx += 1) {
         @memcpy(self.pm, self.gm); // q ← ∇f(x₁)
 
-        // for i = k-1, k-2, …, k-m
-        //     αᵢ ← ρᵢ⋅(sᵢᵀ⋅q)
-        //     q  ← q - αᵢ⋅yᵢ
-        // end
-        for (0..k) |i| {
-            self.as[i] = self.rs[i] * dot(self.Sm[i], self.pm);
-            for (self.pm, self.Ym[i]) |*q_j, y_j| {
-                q_j.* -= self.as[i] * y_j;
-            }
+        for (0..kdx) |i| { // for i = k-1, k-2, …, k-m
+            self.as[i] = self.rs[i] * dot(self.Sm[i], self.pm); // αᵢ ← ρᵢ⋅(sᵢᵀ⋅q)
+            for (self.pm, self.Ym[i]) |*q_j, y_j| q_j.* -= self.as[i] * y_j; // q  ← q - αᵢ⋅yᵢ
         }
 
-        const diag: f64 = (1.0 / self.rs[0]) / dot(self.Ym[0], self.Ym[0]); // γ₁ = s₀ᵀ⋅y₀ / y₀ᵀ⋅y₀
+        diag = (1.0 / self.rs[0]) / dot(self.Ym[0], self.Ym[0]); // γ = sᵀ⋅y / yᵀ⋅y
+        for (self.pm) |*p| p.* *= diag; // r ← γI⋅q
 
-        // r ← γ₁I⋅q, γ₁ = s₀ᵀ⋅y₀ / y₀ᵀ⋅y₀
-        for (self.pm) |*p| p.* *= diag;
-
-        // for i = k-m, k-m+q, …, k-1
-        //     β ← ρᵢ⋅(yᵢᵀ⋅r)
-        //     r ← r + sᵢ⋅(αᵢ - β)
-        // end
-        var i: usize = k - 1;
-        while (true) : (i -= 1) {
-            const beta: f64 = self.rs[i] * dot(self.Ym[i], self.pm);
-            for (self.pm, self.Sm[i]) |*p, s| {
-                p.* += s * (self.as[i] - beta);
-            }
-            if (i == 0) break;
+        idx = kdx - 1;
+        while (true) : (idx -= 1) { // for i = k-m, k-m+q, …, k-1
+            beta = self.rs[idx] * dot(self.Ym[idx], self.pm); // β ← ρᵢ⋅(yᵢᵀ⋅r)
+            for (self.pm, self.Sm[idx]) |*p, s| p.* += s * (self.as[idx] - beta); // r ← r + sᵢ⋅(αᵢ - β)
+            if (idx == 0) break;
         }
 
         for (self.pm) |*p| p.* = -p.*; // pₘ ← -H₁⋅∇f(x₁)
         try self.search(obj, .{}); // x₂ ← x₁ + α⋅p₁, gₙ ← ∇f(x₂)
 
-        for (0..k) |j| {
-            @memcpy(self.Sm[j + 1], self.Sm[j]);
-            @memcpy(self.Ym[j + 1], self.Ym[j]);
-            self.rs[j + 1] = self.rs[j];
+        for (0..kdx) |i| {
+            @memcpy(self.Sm[i + 1], self.Sm[i]);
+            @memcpy(self.Ym[i + 1], self.Ym[i]);
+            self.rs[i + 1] = self.rs[i];
         }
+
         for (self.Sm[0], self.xn, self.xm) |*s_i, xn_i, xm_i| s_i.* = xn_i - xm_i;
+
+        snrm = 0.0;
+        for (self.Sm[0]) |s_i| snrm += pow2(s_i);
+        snrm = @sqrt(snrm);
+        if (snrm <= xtol) return;
+
         for (self.Ym[0], self.gn, self.gm) |*y_i, gn_i, gm_i| y_i.* = gn_i - gm_i;
-        self.rs[0] = blk: {
-            const rho: f64 = 1.0 / dot(self.Sm[0], self.Ym[0]); // ρ₀ ← 1.0 / s₀ᵀ⋅y₀
-            if (rho <= 0.0) unreachable;
-            break :blk rho;
-        };
+
+        ymax = 0.0;
+        for (self.Ym[0]) |y_i| ymax = @max(ymax, @abs(y_i));
+        if (ymax <= gtol) return;
+
+        rho = 1.0 / dot(self.Sm[0], self.Ym[0]); // ρ₀ ← 1.0 / s₀ᵀ⋅y₀
+        if (rho <= 0.0) return LineSearchError.ZoomError;
+        self.rs[0] = rho;
 
         @memcpy(self.xm, self.xn); // xₘ ← x₁
         @memcpy(self.gm, self.gn); // gₘ ← ∇f(x₁)
     }
 
-    while (k < 150) : (k += 1) {
-        // 2nd Step:
-        //     x₁ := self.xm, ∇f(x₁) := self.gm
-        //     x₂ := self.xn, ∇f(x₂) := self.gn
-
+    while (kdx < opt.kmax) : (kdx += 1) {
         @memcpy(self.pm, self.gm); // q ← ∇f(x₁)
 
-        // for i = k-1, k-2, …, k-m
-        //     αᵢ ← ρᵢ⋅(sᵢᵀ⋅q)
-        //     q  ← q - αᵢ⋅yᵢ
-        // end
-        for (0..capacity - 1) |i| {
-            self.as[i] = self.rs[i] * dot(self.Sm[i], self.pm);
-            for (self.pm, self.Ym[i]) |*q_j, y_j| {
-                q_j.* -= self.as[i] * y_j;
-            }
+        for (0..nmax - 1) |i| { // for i = k-1, k-2, …, k-m
+            self.as[i] = self.rs[i] * dot(self.Sm[i], self.pm); // αᵢ ← ρᵢ⋅(sᵢᵀ⋅q)
+            for (self.pm, self.Ym[i]) |*q_j, y_j| q_j.* -= self.as[i] * y_j; // q  ← q - αᵢ⋅yᵢ
         }
 
-        const diag: f64 = (1.0 / self.rs[0]) / dot(self.Ym[0], self.Ym[0]); // γ₁ = s₀ᵀ⋅y₀ / y₀ᵀ⋅y₀
+        diag = (1.0 / self.rs[0]) / dot(self.Ym[0], self.Ym[0]); // γ = sᵀ⋅y / yᵀ⋅y
+        for (self.pm) |*p| p.* *= diag; // r ← γI⋅q
 
-        // r ← γ₁I⋅q, γ₁ = s₀ᵀ⋅y₀ / y₀ᵀ⋅y₀
-        for (self.pm) |*p| p.* *= diag;
-
-        // for i = k-m, k-m+q, …, k-1
-        //     β ← ρᵢ⋅(yᵢᵀ⋅r)
-        //     r ← r + sᵢ⋅(αᵢ - β)
-        // end
-        var i: usize = capacity - 1;
-        while (true) : (i -= 1) {
-            const beta: f64 = self.rs[i] * dot(self.Ym[i], self.pm);
-            for (self.pm, self.Sm[i]) |*p, s| {
-                p.* += s * (self.as[i] - beta);
-            }
-            if (i == 0) break;
+        idx = comptime nmax - 1;
+        while (true) : (idx -= 1) { // for i = k-m, k-m+1, …, k-1
+            beta = self.rs[idx] * dot(self.Ym[idx], self.pm); // β ← ρᵢ⋅(yᵢᵀ⋅r)
+            for (self.pm, self.Sm[idx]) |*p, s| p.* += s * (self.as[idx] - beta); // r ← r + sᵢ⋅(αᵢ - β)
+            if (idx == 0) break;
         }
 
         for (self.pm) |*p| p.* = -p.*; // pₘ ← -H₁⋅∇f(x₁)
         try self.search(obj, .{}); // x₂ ← x₁ + α⋅p₁, gₙ ← ∇f(x₂)
 
-        for (0..capacity - 1) |j| {
-            @memcpy(self.Sm[j + 1], self.Sm[j]);
-            @memcpy(self.Ym[j + 1], self.Ym[j]);
-            self.rs[j + 1] = self.rs[j];
+        for (0..nmax - 1) |i| {
+            @memcpy(self.Sm[i + 1], self.Sm[i]);
+            @memcpy(self.Ym[i + 1], self.Ym[i]);
+            self.rs[i + 1] = self.rs[i];
         }
+
         for (self.Sm[0], self.xn, self.xm) |*s_i, xn_i, xm_i| s_i.* = xn_i - xm_i;
+
+        snrm = 0.0;
+        for (self.Sm[0]) |s_i| snrm += pow2(s_i);
+        snrm = @sqrt(snrm);
+        if (snrm <= xtol) return;
+
         for (self.Ym[0], self.gn, self.gm) |*y_i, gn_i, gm_i| y_i.* = gn_i - gm_i;
-        self.rs[0] = blk: {
-            const rho: f64 = 1.0 / dot(self.Sm[0], self.Ym[0]); // ρ₀ ← 1.0 / s₀ᵀ⋅y₀
-            if (rho <= 0.0) unreachable;
-            break :blk rho;
-        };
+
+        ymax = 0.0;
+        for (self.Ym[0]) |y_i| ymax = @max(ymax, @abs(y_i));
+        if (ymax <= gtol) return;
+
+        rho = 1.0 / dot(self.Sm[0], self.Ym[0]); // ρ₀ ← 1.0 / s₀ᵀ⋅y₀
+        if (rho <= 0.0) return LineSearchError.ZoomError;
+        self.rs[0] = rho;
 
         @memcpy(self.xm, self.xn); // xₘ ← x₁
         @memcpy(self.gm, self.gn); // gₘ ← ∇f(x₁)
@@ -382,17 +383,11 @@ test "BFGS Test Case: Rosenbrock's function 2D" {
     const bfgs: *Self = try Self.init(page, dims, .{});
     defer bfgs.deinit(page);
 
-    for (bfgs.xm, 1..) |*p, i| p.* = if (i < dims) -1.2 else 1.0;
-
     const rosenbrock: Rosenbrock = .{ .a = 1.0, .b = 100.0 };
-    debug.print("  x_now = {d: >7.5}, f_now = {d: >18.15}\n", .{ bfgs.xm, rosenbrock.func(bfgs.xm) });
 
-    // xₙ ← xₘ + α⋅pₘ
-    try bfgs.solve(rosenbrock, .{});
-
-    debug.print("  x_new = {d: >7.5}, f_new = {d: >18.15}\n", .{ bfgs.xn, rosenbrock.func(bfgs.xn) });
-
-    // try testing.expect(rosenbrock.func(bfgs.xn) < rosenbrock.func(bfgs.xm));
+    for (bfgs.xm, 1..) |*p, i| p.* = if (i < dims) -1.2 else 1.0;
+    try bfgs.solve(rosenbrock, .{ .xtol = 1e-16, .gtol = 1e-16, .kmax = 300 });
+    for (bfgs.xm, 0..) |x, i| if (testing.expectApproxEqRel(x, 1.0, 1e-12)) |_| {} else |_| debug.print("x[{d}] = {d}\n", .{ i, x });
 }
 
 test "BFGS Test Case: Rosenbrock's function 3D" {
@@ -403,17 +398,11 @@ test "BFGS Test Case: Rosenbrock's function 3D" {
     const bfgs: *Self = try Self.init(page, dims, .{});
     defer bfgs.deinit(page);
 
-    for (bfgs.xm, 1..) |*p, i| p.* = if (i < dims) -1.2 else 1.0;
-
     const rosenbrock: Rosenbrock = .{ .a = 1.0, .b = 100.0 };
-    debug.print("  x_now = {d: >7.5}, f_now = {d: >18.15}\n", .{ bfgs.xm, rosenbrock.func(bfgs.xm) });
 
-    // xₙ ← xₘ + α⋅pₘ
-    try bfgs.solve(rosenbrock, .{});
-
-    debug.print("  x_new = {d: >7.5}, f_new = {d: >18.15}\n", .{ bfgs.xn, rosenbrock.func(bfgs.xn) });
-
-    // try testing.expect(rosenbrock.func(bfgs.xn) < rosenbrock.func(bfgs.xm));
+    for (bfgs.xm, 1..) |*p, i| p.* = if (i < dims) -1.2 else 1.0;
+    try bfgs.solve(rosenbrock, .{ .xtol = 1e-16, .gtol = 1e-16, .kmax = 400 });
+    for (bfgs.xm, 0..) |x, i| if (testing.expectApproxEqRel(x, 1.0, 1e-12)) |_| {} else |_| debug.print("x[{d}] = {d}\n", .{ i, x });
 }
 
 test "BFGS Test Case: Rosenbrock's function 4D" {
@@ -424,17 +413,11 @@ test "BFGS Test Case: Rosenbrock's function 4D" {
     const bfgs: *Self = try Self.init(page, dims, .{});
     defer bfgs.deinit(page);
 
-    for (bfgs.xm, 1..) |*p, i| p.* = if (i < dims) -1.2 else 1.0;
-
     const rosenbrock: Rosenbrock = .{ .a = 1.0, .b = 100.0 };
-    debug.print("  x_now = {d: >7.5}, f_now = {d: >18.15}\n", .{ bfgs.xm, rosenbrock.func(bfgs.xm) });
 
-    // xₙ ← xₘ + α⋅pₘ
-    try bfgs.solve(rosenbrock, .{});
-
-    debug.print("  x_new = {d: >7.5}, f_new = {d: >18.15}\n", .{ bfgs.xn, rosenbrock.func(bfgs.xn) });
-
-    // try testing.expect(rosenbrock.func(bfgs.xn) < rosenbrock.func(bfgs.xm));
+    for (bfgs.xm, 1..) |*p, i| p.* = if (i < dims) -1.2 else 1.0;
+    try bfgs.solve(rosenbrock, .{ .xtol = 1e-16, .gtol = 1e-16, .kmax = 300 });
+    for (bfgs.xm, 0..) |x, i| if (testing.expectApproxEqRel(x, 1.0, 1e-12)) |_| {} else |_| debug.print("x[{d}] = {d}\n", .{ i, x });
 }
 
 test "BFGS Test Case: Rosenbrock's function 5D" {
@@ -445,17 +428,11 @@ test "BFGS Test Case: Rosenbrock's function 5D" {
     const bfgs: *Self = try Self.init(page, dims, .{});
     defer bfgs.deinit(page);
 
-    for (bfgs.xm, 1..) |*p, i| p.* = if (i < dims) -1.2 else 1.0;
-
     const rosenbrock: Rosenbrock = .{ .a = 1.0, .b = 100.0 };
-    debug.print("  x_now = {d: >7.5}, f_now = {d: >18.15}\n", .{ bfgs.xm, rosenbrock.func(bfgs.xm) });
 
-    // xₙ ← xₘ + α⋅pₘ
-    try bfgs.solve(rosenbrock, .{});
-
-    debug.print("  x_new = {d: >7.5}, f_new = {d: >18.15}\n", .{ bfgs.xn, rosenbrock.func(bfgs.xn) });
-
-    // try testing.expect(rosenbrock.func(bfgs.xn) < rosenbrock.func(bfgs.xm));
+    for (bfgs.xm, 1..) |*p, i| p.* = if (i < dims) -1.2 else 1.0;
+    try bfgs.solve(rosenbrock, .{ .xtol = 1e-16, .gtol = 1e-16, .kmax = 300 });
+    for (bfgs.xm, 0..) |x, i| if (testing.expectApproxEqRel(x, 1.0, 1e-12)) |_| {} else |_| debug.print("x[{d}] = {d}\n", .{ i, x });
 }
 
 //
