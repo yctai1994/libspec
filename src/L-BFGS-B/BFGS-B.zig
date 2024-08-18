@@ -12,9 +12,13 @@
 //!     "Numerical Optimization 2nd Edition,"
 //!     2006, Procedure 18.2
 
-xk: []f64, // xk
-gk: []f64, // ∇f(xk)
-pk: []f64,
+xk: []f64, // k-th location, xk
+gk: []f64, // k-th gradient, ∇f(xk)
+xc: []f64, // k-th Cauchy point
+pk: []f64, // k-th search direction
+
+tk: []f64, // temp buffer, for finding Cauchy point
+xt: []f64, // temp buffer, for finding Cauchy point
 
 xn: []f64, // xn
 gn: []f64, // ∇f(xn)
@@ -29,8 +33,13 @@ bf: []f64, // buffer
 
 Bk: [][]f64, // current approximation of Hessian
 
+AHA: [][]f64, // temp buffer, for solving quadratic subproblem
+iWk: []usize, // k-th working set
+
 const Errors = error{
     CurvatureConditionError,
+    DescentDirectionError,
+    NotPositiveDefinite,
     DimensionMismatch,
     SingularError,
     SearchError,
@@ -46,43 +55,59 @@ pub fn init(allocator: mem.Allocator, n: usize) Errors!*Self {
     errdefer allocator.destroy(self);
 
     self.xk = try ArrF64.vector(n);
-    errdefer allocator.free(self.xk);
+    errdefer ArrF64.free(self.xk);
 
     self.gk = try ArrF64.vector(n);
-    errdefer allocator.free(self.gk);
+    errdefer ArrF64.free(self.gk);
+
+    self.xc = try ArrF64.vector(n);
+    errdefer ArrF64.free(self.xc);
 
     self.pk = try ArrF64.vector(n);
-    errdefer allocator.free(self.pk);
+    errdefer ArrF64.free(self.pk);
+
+    self.tk = try ArrF64.vector(n);
+    errdefer ArrF64.free(self.tk);
+
+    self.xt = try ArrF64.vector(n);
+    errdefer ArrF64.free(self.xt);
 
     self.xn = try ArrF64.vector(n);
-    errdefer allocator.free(self.xn);
+    errdefer ArrF64.free(self.xn);
 
     self.gn = try ArrF64.vector(n);
-    errdefer allocator.free(self.gn);
+    errdefer ArrF64.free(self.gn);
 
     self.sk = try ArrF64.vector(n);
-    errdefer allocator.free(self.sk);
+    errdefer ArrF64.free(self.sk);
 
     self.yk = try ArrF64.vector(n);
-    errdefer allocator.free(self.yk);
+    errdefer ArrF64.free(self.yk);
 
     self.ak = try ArrF64.vector(n);
-    errdefer allocator.free(self.ak);
+    errdefer ArrF64.free(self.ak);
 
     self.uk = try ArrF64.vector(n);
-    errdefer allocator.free(self.uk);
+    errdefer ArrF64.free(self.uk);
 
     self.vk = try ArrF64.vector(n);
-    errdefer allocator.free(self.vk);
+    errdefer ArrF64.free(self.vk);
 
     self.bf = try ArrF64.vector(n);
-    errdefer allocator.free(self.bf);
+    errdefer ArrF64.free(self.bf);
 
     self.Bk = try ArrF64.matrix(n, n);
+    errdefer ArrF64.free(self.Bk);
 
-    for (self.Bk, 0..) |Bk_i, i| {
-        @memset(Bk_i, 0.0);
-        Bk_i[i] = 1.0;
+    self.AHA = try ArrF64.matrix(n, n);
+    errdefer ArrF64.free(self.AHA);
+
+    self.iWk = try allocator.alloc(usize, n);
+    errdefer allocator.free(self.iWk);
+
+    for (0..n) |i| {
+        @memset(self.Bk[i], 0.0);
+        self.Bk[i][i] = 1.0;
     }
 
     return self;
@@ -91,22 +116,29 @@ pub fn init(allocator: mem.Allocator, n: usize) Errors!*Self {
 pub fn deinit(self: *const Self, allocator: mem.Allocator) void {
     const ArrF64 = Array(f64){ .allocator = allocator };
 
-    ArrF64.free(self.Bk);
-
-    ArrF64.free(self.bf);
-    ArrF64.free(self.vk);
-    ArrF64.free(self.uk);
-    ArrF64.free(self.ak);
-    ArrF64.free(self.yk);
-    ArrF64.free(self.sk);
-
-    ArrF64.free(self.gn);
-    ArrF64.free(self.xn);
-
-    ArrF64.free(self.pk);
-    ArrF64.free(self.gk);
     ArrF64.free(self.xk);
+    ArrF64.free(self.gk);
+    ArrF64.free(self.xc);
+    ArrF64.free(self.pk);
 
+    ArrF64.free(self.tk);
+    ArrF64.free(self.xt);
+
+    ArrF64.free(self.xn);
+    ArrF64.free(self.gn);
+
+    ArrF64.free(self.sk);
+    ArrF64.free(self.yk);
+    ArrF64.free(self.ak);
+
+    ArrF64.free(self.uk);
+    ArrF64.free(self.vk);
+    ArrF64.free(self.bf);
+
+    ArrF64.free(self.Bk);
+    ArrF64.free(self.AHA);
+
+    allocator.free(self.iWk);
     allocator.destroy(self);
 }
 
@@ -124,22 +156,25 @@ const Options = struct {
     SMIN: comptime_float = 1e-2, // line search min. step
 };
 
-fn search(self: *const Self, obj: anytype, comptime opt: Options) Errors!void {
+fn search(self: *const Self, obj: anytype, opt_smin: ?f64, opt_smax: ?f64, comptime opt: Options) Errors!void {
+    const smin: f64 = @max(opt.SMIN, opt_smin orelse opt.SMIN);
+    const smax: f64 = @min(opt.SMAX, opt_smax orelse opt.SMAX);
+
     const f0: f64 = obj.func(self.xk); // ϕ(0) = f(xk)
     const g0: f64 = try dot(self.pk, self.gk); // ϕ'(0) = pkᵀ⋅∇f(xk)
 
-    if (0.0 < g0) return Errors.SearchError;
+    if (0.0 < g0) return Errors.DescentDirectionError;
 
     var f_old: f64 = undefined;
     var f_now: f64 = undefined;
     var g_now: f64 = undefined;
 
     var a_old: f64 = 0.0;
-    var a_now: f64 = opt.SMIN;
+    var a_now: f64 = smin;
 
     var iter: usize = 0;
 
-    while (a_now < opt.SMAX) : (iter += 1) {
+    while (a_now <= smax) : (iter += 1) {
         for (self.xn, self.xk, self.pk) |*xn_i, xk_i, pm_i| xn_i.* = xk_i + a_now * pm_i; // xt ← xk + α⋅pk
         f_now = obj.func(self.xn); // ϕ(α) = f(xk + α⋅pk)
 
@@ -228,50 +263,259 @@ fn interpolate(a_old: f64, a_new: f64, f_old: f64, f_new: f64, g_old: f64, g_new
     return a_new - (a_new - a_old) * (nu / de);
 }
 
-fn solve(self: *const Self, obj: anytype, comptime opt: Options) Errors!void {
+fn project(self: *const Self, lb: []f64, ub: []f64, ta: *usize, comptime opt: Options) Errors!void {
+    const n: usize = self.xk.len;
+    for (0..n) |i| {
+        if (self.gk[i] < 0.0 and ub[i] < math.inf(f64)) {
+            self.tk[i] = (self.xk[i] - ub[i]) / self.gk[i];
+        } else if (0.0 < self.gk[i] and -math.inf(f64) < lb[i]) {
+            self.tk[i] = (self.xk[i] - lb[i]) / self.gk[i];
+        } else self.tk[i] = math.inf(f64);
+    }
+
+    @memcpy(self.gn, self.tk); // use gn as buffer, for sorting
+    if (opt.SHOW) debug.print("  tk       = {d: >9.6}\n", .{self.tk});
+
+    insertionSort(self.gn); // sorted tk
+    if (opt.SHOW) debug.print("  sort(tk) = {d: >9.6}\n", .{self.gn});
+
+    var t_left: f64 = 0.0;
+
+    var dt: f64 = undefined;
+    var dt_min: f64 = undefined;
+
+    var df: f64 = undefined;
+    var ddf: f64 = undefined;
+
+    @memcpy(self.xt, self.xk); // x(t_0) and x( t(j-1) )
+
+    for (self.gn) |t_right| { // for j = 1, 2, ...
+        if (t_left == t_right) {
+            if (opt.SHOW) debug.print("  t_left == t_right\n", .{});
+            continue;
+        }
+        dt = t_right - t_left;
+
+        for (0..n) |i| self.pk[i] = if (t_left < self.tk[i]) -self.gk[i] else 0.0; // p(j-1)
+
+        @memcpy(self.xc, self.xt); // xc ← x( t(j-1) )
+        // pᵀ⋅( Bk⋅x( t(j-1) ) + gk ) = pᵀ⋅( (Lk⋅Rk)⋅x( t(j-1) ) + gk )
+        try trmv('R', 'N', self.Bk, self.xc);
+        try trmv('R', 'T', self.Bk, self.xc);
+        for (self.xc, self.gk) |*xc_i, gk_i| xc_i.* += gk_i;
+        df = try dot(self.pk, self.xc);
+
+        // pᵀ⋅Bk⋅p = pᵀ⋅(Lk⋅Rk)⋅p
+        try trmv('R', 'N', self.Bk, self.pk);
+        ddf = try dot(self.pk, self.pk);
+        dt_min = -df / ddf;
+
+        if (opt.SHOW) debug.print("  dt = {d: >9.6}, dt_min = {d: >9.6}\n", .{ dt, dt_min });
+
+        if (dt <= dt_min) {
+            if (opt.SHOW) debug.print("  << dt <= dt_min >>\n", .{});
+            for (0..n) |i| self.xt[i] += if (t_left < self.tk[i]) -dt * self.gk[i] else 0.0;
+            t_left = t_right;
+        } else break;
+    }
+
+    dt_min = @max(0.0, dt_min);
+    t_left += dt_min;
+
+    ta.* = 0;
+
+    for (0..n) |i| {
+        if (t_left < self.tk[i]) {
+            self.xc[i] = self.xk[i] - t_left * self.gk[i];
+        } else {
+            self.xc[i] = self.xk[i] - self.tk[i] * self.gk[i];
+            self.iWk[ta.*] = i;
+            ta.* += 1;
+        }
+    }
+
+    if (opt.SHOW) {
+        debug.print("  dt_min = {d: >9.6}, t_left = {d: >9.6}\n", .{ dt_min, t_left });
+        debug.print("  Cauchy point xc = {d: >9.6}, iWk = {d} (ta = {d})\n", .{ self.xc, self.iWk[0..ta.*], ta.* });
+    }
+}
+
+fn solve(self: *const Self, obj: anytype, lb: []f64, ub: []f64, comptime opt: Options) Errors!void {
     var rk: f64 = undefined; // γ = sᵀ⋅y / yᵀ⋅y
     var sn: f64 = undefined; // ‖sk‖₂, 2-norm of sk
     var ym: f64 = undefined; // max(|ykᵢ|), max-norm of yk
+
+    var ta: usize = undefined;
 
     // = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = =
 
     obj.grad(self.xk, self.gk); // g₀ ← ∇f(x₀)
 
+    if (opt.SHOW) debug.print("x{d: <3} = {d: >9.6}, f{d: <3} = {e: <12.10}\n", .{ 0, self.xk, 0, obj.func(self.xk) });
+
     for (0..opt.KMAX) |kx| {
-        // pk ← Bk⁻¹⋅∇f(xk)
-        @memcpy(self.pk, self.gk);
-        try trsv('R', 'T', self.Bk, self.pk);
-        try trsv('R', 'N', self.Bk, self.pk);
-        for (self.pk) |*p| p.* = -p.*; // pk ← -Bk⁻¹⋅∇f(xk)
+        try self.project(lb, ub, &ta, opt);
 
-        try self.search(obj, opt); // xn ← xk + α⋅pk, gn ← ∇f(xn)
+        if (0 < ta) {
+            debug.print("  = = = = =\n", .{});
 
-        if (opt.SHOW) {
-            debug.print("x{d: <3} = {d: >9.6}, f{d: <3} = {e: <12.10}\n", .{ kx, self.xk, kx, obj.func(self.xk) });
-            debug.print("x{d: <3} = {d: >9.6}, f{d: <3} = {e: <12.10}\n", .{ kx + 1, self.xn, kx + 1, obj.func(self.xn) });
+            for (0..ta, self.iWk[0..ta]) |ia, ja| {
+                @memset(self.AHA[ia], 0.0);
+                self.AHA[ia][ja] = 1.0;
+            }
+
+            for (0..ta, self.iWk[0..ta]) |ia, ja| {
+                debug.print("  (ia, ja) = ({d}, {d}) => {d: >9.6}\n", .{ ia, ja, self.AHA[ia] });
+            }
+
+            debug.print("  = = = = =\n", .{});
+
+            for (0..ta) |ia| try trsv('R', 'T', self.Bk, self.AHA[ia]);
+            for (0..ta) |ia| try trsv('R', 'N', self.Bk, self.AHA[ia]);
+
+            for (0..ta, self.iWk[0..ta]) |ia, ja| {
+                debug.print("  (ia, ja) = ({d}, {d}) => {d: >9.6}\n", .{ ia, ja, self.AHA[ia] });
+            }
+
+            debug.print("  = = = = =\n", .{});
+
+            for (0..ta) |i| {
+                for (0..ta, self.iWk[0..ta]) |j, ja| {
+                    self.AHA[i][j] = self.AHA[i][ja];
+                }
+            }
+
+            for (0..ta, self.iWk[0..ta]) |ia, ja| {
+                debug.print("  (ia, ja) = ({d}, {d}) => {d: >9.6}\n", .{ ia, ja, self.AHA[ia][0..ta] });
+            }
+
+            debug.print("  = = = = =\n", .{});
+
+            try cholesky(self.AHA[0..ta]);
+
+            for (0..ta, self.iWk[0..ta]) |ia, ja| {
+                debug.print("  (ia, ja) = ({d}, {d}) => {d: >9.6}\n", .{ ia, ja, self.AHA[ia][0..ta] });
+            }
+
+            // pk ← Bk⁻¹⋅∇f(xk)
+            @memcpy(self.pk, self.gk);
+            try trsv('R', 'T', self.Bk, self.pk);
+            try trsv('R', 'N', self.Bk, self.pk);
+            for (self.pk, self.xc, self.xk) |*pk_i, xc_i, xk_i| pk_i.* = pk_i.* + xc_i - xk_i; // pk ← Bk⁻¹⋅∇f(xk) + (xc - xk)
+
+            debug.print("  pk = {d: >9.6}\n", .{self.pk});
+
+            for (0..ta, self.iWk[0..ta]) |i, ia| {
+                self.tk[i] = self.pk[ia]; // use tk as buffer
+            }
+
+            debug.print("  tk = {d: >9.6}\n", .{self.tk[0..ta]});
+
+            try trsv('L', 'N', self.AHA[0..ta], self.tk[0..ta]); // L⋅y = b
+            try trsv('L', 'T', self.AHA[0..ta], self.tk[0..ta]); // Lᵀ⋅x = y
+
+            debug.print("  tk = {d: >9.6}\n", .{self.tk[0..ta]}); // Here, get the Lagrange multiplier λₖ
+
+            @memset(self.pk, 0.0);
+            for (self.iWk[0..ta], self.tk[0..ta]) |ia, lambda_ia| self.pk[ia] = lambda_ia; // Akᵀ⋅λₖ
+            for (self.pk, self.gk) |*pk_i, gk_i| pk_i.* -= gk_i; // Akᵀ⋅λₖ - gk
+
+            // Bk⁻¹⋅(Akᵀ⋅λₖ - gk)
+            try trsv('R', 'T', self.Bk, self.pk);
+            try trsv('R', 'N', self.Bk, self.pk);
+
+            debug.print("  = = = = =\n", .{});
+
+            debug.print("  pk = {d: >9.6}\n", .{self.pk});
+
+            for (self.tk, self.pk, self.xk, lb, ub) |*tk_i, pk_i, xk_i, lb_i, ub_i| {
+                if (0.0 < pk_i and ub_i < math.inf(f64)) {
+                    tk_i.* = (ub_i - xk_i) / pk_i;
+                } else if (pk_i < 0.0 and -math.inf(f64) < lb_i) {
+                    tk_i.* = (lb_i - xk_i) / pk_i;
+                } else tk_i.* = math.inf(f64);
+                if (tk_i.* == 0.0) tk_i.* = math.inf(f64);
+            }
+
+            insertionSort(self.tk);
+
+            debug.print("  line-search step max. = {d: >9.6}\n", .{self.tk[0]});
+
+            // xn ← xk + α⋅pk, gn ← ∇f(xn)
+            self.search(obj, null, if (self.tk[0] < math.inf(f64)) self.tk[0] else null, opt) catch |err| {
+                switch (err) {
+                    Errors.DescentDirectionError => {
+                        debug.print("Finished by non-descent direction.\n", .{});
+                        break;
+                    },
+                    else => return err,
+                }
+            };
+        } else {
+            // pk ← Bk⁻¹⋅∇f(xk)
+            @memcpy(self.pk, self.gk);
+            try trsv('R', 'T', self.Bk, self.pk);
+            try trsv('R', 'N', self.Bk, self.pk);
+            for (self.pk) |*p| p.* = -p.*; // pk ← -Bk⁻¹⋅∇f(xk)
+
+            // xn ← xk + α⋅pk, gn ← ∇f(xn)
+            self.search(obj, null, null, opt) catch |err| {
+                switch (err) {
+                    Errors.DescentDirectionError => {
+                        debug.print("Finished by non-descent direction.\n", .{});
+                        break;
+                    },
+                    else => return err,
+                }
+            };
+
+            ta = 0;
+            for (self.xn, lb, ub) |*xn_i, lb_i, ub_i| {
+                if (xn_i.* < lb_i) {
+                    xn_i.* = lb_i;
+                    ta += 1;
+                } else if (ub_i < xn_i.*) {
+                    xn_i.* = ub_i;
+                    ta += 1;
+                }
+            }
+
+            if (0 < ta) obj.grad(self.xn, self.gn); // gn ← ∇f(xn)
         }
+
+        // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+        if (opt.SHOW) debug.print("x{d: <3} = {d: >9.6}, f{d: <3} = {e: <12.10}\n", .{ kx + 1, self.xn, kx + 1, obj.func(self.xn) });
 
         // sk ← xn - xk
         for (self.sk, self.xn, self.xk) |*sk_i, xn_i, xk_i| sk_i.* = xn_i - xk_i;
         sn = 0.0;
         for (self.sk) |sk_i| sn += pow2(sk_i);
         sn = @sqrt(sn);
-        if (sn <= opt.XTOL) break;
+        debug.print("  sn = {d}\n", .{sn});
+        if (sn <= opt.XTOL) {
+            debug.print("Finished by XTOL.\n", .{});
+            break;
+        }
 
         // yk ← ∇f(xn) - ∇f(xk) = gn - gk
         for (self.yk, self.gn, self.gk) |*yk_i, gn_i, gk_i| yk_i.* = gn_i - gk_i;
         ym = 0.0;
         for (self.yk) |ym_i| ym = @max(ym, @abs(ym_i));
-        if (ym <= opt.GTOL) break;
+        debug.print("  ym = {d}\n", .{ym});
+        if (ym <= opt.GTOL) {
+            debug.print("Finished by GTOL.\n", .{});
+            break;
+        }
 
         // secant_norm2 ← skᵀ⋅yk
         const secant_norm2: f64 = try dot(self.sk, self.yk);
-        if (secant_norm2 <= 0.0) return Errors.CurvatureConditionError;
+        // if (secant_norm2 <= 0.0) return Errors.CurvatureConditionError;
 
         rk = secant_norm2 / try dot(self.yk, self.yk); // γ = sᵀ⋅y / yᵀ⋅y
         if (2.2e-16 < rk) {
             // sk ← Lkᵀ⋅sk = Rk⋅sk
-            trmv(self.Bk, self.sk);
+            try trmv('R', 'N', self.Bk, self.sk);
 
             // skᵀ⋅(Lk⋅Lkᵀ)⋅sk ← skᵀ⋅sk
             const quadratic_form: f64 = try dot(self.sk, self.sk);
@@ -313,35 +557,28 @@ fn solve(self: *const Self, obj: anytype, comptime opt: Options) Errors!void {
 //
 
 test "BFGS-B Test Case: Rosenbrock's function 2D ~ 5D" {
-    const SHOW_ITERATIONS: bool = false;
+    const SHOW_ITERATIONS: bool = true;
 
     const page = testing.allocator;
 
-    for (2..6) |n| {
-        debug.print("\x1b[32m[[ Line Search Test Case: Rosenbrock's function {d}D ]]\x1b[0m\n", .{n});
+    const n: usize = 2;
+    // for (2..6) |n| {
+    debug.print("\x1b[32m[[ Line Search Test Case: Rosenbrock's function {d}D ]]\x1b[0m\n", .{n});
 
-        const bfgsb: *Self = try Self.init(page, n);
-        defer bfgsb.deinit(page);
+    const bfgsb: *Self = try Self.init(page, n);
+    defer bfgsb.deinit(page);
 
-        const rosenbrock: Rosenbrock = .{ .a = 1.0, .b = 100.0 };
-        for (bfgsb.xk, 1..) |*p, i| p.* = if (i < n) -1.2 else 1.0;
+    const rosenbrock: Rosenbrock = .{ .a = 1.0, .b = 100.0 };
+    var lb: [2]f64 = .{ -1.0, 0.0 };
+    var ub: [2]f64 = .{ 0.8, 2.0 };
+    // for (bfgsb.xk, 1..) |*p, i| p.* = if (i < n) -1.2 else 1.0;
+    inline for (bfgsb.xk, .{ -0.3, 1.8 }) |*p, v| p.* = v;
 
-        try bfgsb.solve(rosenbrock, .{ .KMAX = 800, .SHOW = SHOW_ITERATIONS });
-        for (bfgsb.xk, 0..) |x, i| {
-            if (testing.expectApproxEqRel(x, 1.0, 1e-12)) |_| {} else |_| debug.print("x[{d}] = {d}\n", .{ i, x });
-        }
-    }
-}
-
-fn trmv(R: [][]f64, x: []f64) void {
-    var temp: f64 = undefined;
-    for (R, x, 0..) |R_i, *x_i, i| {
-        temp = 0.0;
-        for (R_i[i..], x[i..]) |R_ij, x_j| {
-            temp += R_ij * x_j;
-        }
-        x_i.* = temp;
-    }
+    try bfgsb.solve(rosenbrock, &lb, &ub, .{ .KMAX = 550, .SHOW = SHOW_ITERATIONS });
+    // for (bfgsb.xk, 0..) |x, i| {
+    //     if (testing.expectApproxEqRel(x, 1.0, 1e-12)) |_| {} else |_| debug.print("x[{d}] = {d}\n", .{ i, x });
+    // }
+    // }
 }
 
 fn update(R: [][]f64, u: []f64, v: []f64, b: []f64) Errors!void {
@@ -483,65 +720,18 @@ test "(RᵀR)⋅x = b" {
 // Subroutines
 //
 
-fn Array(comptime T: type) type {
-    // already comptime scope
-    const slice_al: comptime_int = @alignOf([]T);
-    const child_al: comptime_int = @alignOf(T);
-    const slice_sz: comptime_int = @sizeOf(usize) * 2;
-    const child_sz: comptime_int = @sizeOf(T);
+fn insertionSort(arr: []f64) void {
+    if (arr.len == 1) return;
+    var j: usize = undefined;
 
-    return struct {
-        allocator: std.mem.Allocator,
-
-        fn matrix(self: @This(), nrow: usize, ncol: usize) Errors![][]T {
-            const buff: []u8 = try self.allocator.alloc(u8, nrow * ncol * child_sz + nrow * slice_sz);
-
-            const mat: [][]T = blk: {
-                const ptr: [*]align(slice_al) []T = @ptrCast(@alignCast(buff.ptr));
-                break :blk ptr[0..nrow];
-            };
-
-            const chunk_sz: usize = ncol * child_sz;
-            var padding: usize = nrow * slice_sz;
-
-            for (mat) |*row| {
-                row.* = blk: {
-                    const ptr: [*]align(child_al) T = @ptrCast(@alignCast(buff.ptr + padding));
-                    break :blk ptr[0..ncol];
-                };
-                padding += chunk_sz;
-            }
-
-            return mat;
+    for (arr[1..], 1..) |val, i| {
+        j = i;
+        while (0 < j and val < arr[j - 1]) : (j -= 1) {
+            arr[j] = arr[j - 1];
         }
-
-        fn vector(self: @This(), n: usize) Errors![]T {
-            return try self.allocator.alloc(T, n);
-        }
-
-        fn free(self: @This(), slice: anytype) void {
-            const S: type = comptime @TypeOf(slice);
-
-            switch (S) {
-                [][]T => {
-                    const ptr: [*]u8 = @ptrCast(@alignCast(slice.ptr));
-                    const len: usize = blk: {
-                        const nrow: usize = slice.len;
-                        const ncol: usize = slice[0].len;
-                        break :blk nrow * ncol * child_sz + nrow * slice_sz;
-                    };
-
-                    self.allocator.free(ptr[0..len]);
-                },
-                []T => {
-                    self.allocator.free(slice);
-                },
-                else => @compileError("Invalid type: " ++ @typeName(T)),
-            }
-
-            return;
-        }
-    };
+        arr[j] = val;
+    }
+    return;
 }
 
 fn dot(x: []f64, y: []f64) Errors!f64 {
@@ -564,5 +754,8 @@ const math = std.math;
 const debug = std.debug;
 const testing = std.testing;
 
+const trmv = @import("./trmv.zig").trmv;
 const trsv = @import("./trsv.zig").trsv;
+const Array = @import("./array.zig").Array;
+const cholesky = @import("./cholesky.zig").cholesky;
 const Rosenbrock = @import("./Rosenbrock.zig");
