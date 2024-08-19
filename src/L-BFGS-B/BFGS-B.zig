@@ -42,6 +42,7 @@ const Errors = error{
     NotPositiveDefinite,
     DimensionMismatch,
     SingularError,
+    BoundsError,
     SearchError,
     ZoomError,
 } || mem.Allocator.Error;
@@ -251,7 +252,7 @@ fn zoom(self: *const Self, a_lb: f64, a_rb: f64, f0: f64, g0: f64, obj: anytype,
             f_lo = f_now;
             g_lo = g_now;
         }
-    }
+    } else return Errors.ZoomError;
 }
 
 fn interpolate(a_old: f64, a_new: f64, f_old: f64, f_new: f64, g_old: f64, g_new: f64) Errors!f64 {
@@ -263,21 +264,48 @@ fn interpolate(a_old: f64, a_new: f64, f_old: f64, f_new: f64, g_old: f64, g_new
     return a_new - (a_new - a_old) * (nu / de);
 }
 
-fn project(self: *const Self, lb: []f64, ub: []f64, ta: *usize, comptime opt: Options) Errors!void {
-    const n: usize = self.xk.len;
-    for (0..n) |i| {
-        if (self.gk[i] < 0.0 and ub[i] < math.inf(f64)) {
-            self.tk[i] = (self.xk[i] - ub[i]) / self.gk[i];
-        } else if (0.0 < self.gk[i] and -math.inf(f64) < lb[i]) {
-            self.tk[i] = (self.xk[i] - lb[i]) / self.gk[i];
-        } else self.tk[i] = math.inf(f64);
-    }
+fn checkbounds(x: []f64, lb: []f64, ub: []f64) Errors!void {
+    for (x, lb, ub) |x_i, lb_i, ub_i| if (x_i < lb_i or ub_i < x_i) return Errors.BoundsError;
+}
 
-    @memcpy(self.gn, self.tk); // use gn as buffer, for sorting
+// t := buffer, storing max. step of each dimension
+// x := start point
+// d := direction (including length)
+fn _project(t: []f64, x: []f64, d: []f64, lb: []f64, ub: []f64) void {
+    const inf: f64 = comptime math.inf(f64);
+    for (t, x, d, lb, ub) |*t_i, x_i, d_i, lb_i, ub_i| {
+        if (-inf < lb_i and d_i < 0.0) {
+            t_i.* = (lb_i - x_i) / d_i;
+        } else if (ub_i < inf and 0.0 < d_i) {
+            t_i.* = (ub_i - x_i) / d_i;
+        } else { // (d_i == 0) or (no bounds in d_i direction)
+            t_i.* = inf;
+        }
+    }
+}
+
+fn truncate(x: []f64, lb: []f64, ub: []f64, ta: *usize) void {
+    ta.* = 0; // count active bounds
+    for (x, lb, ub) |*x_i, lb_i, ub_i| {
+        if (x_i.* < lb_i) {
+            x_i.* = lb_i;
+            ta.* += 1;
+        } else if (ub_i < x_i.*) {
+            x_i.* = ub_i;
+            ta.* += 1;
+        }
+    }
+}
+
+fn project(self: *const Self, lb: []f64, ub: []f64, ta: *usize, comptime opt: Options) Errors!void {
+    for (self.pk, self.gk) |*p, g| p.* = -g;
+    _project(self.tk, self.xk, self.pk, lb, ub);
     if (opt.SHOW) debug.print("  tk       = {d: >9.6}\n", .{self.tk});
 
-    insertionSort(self.gn); // sorted tk
-    if (opt.SHOW) debug.print("  sort(tk) = {d: >9.6}\n", .{self.gn});
+    @memcpy(self.bf, self.tk); // use bf as buffer, for sorting
+
+    insertionSort(self.bf); // sorted tk
+    if (opt.SHOW) debug.print("  sort(tk) = {d: >9.6}\n", .{self.bf});
 
     var t_left: f64 = 0.0;
 
@@ -289,16 +317,17 @@ fn project(self: *const Self, lb: []f64, ub: []f64, ta: *usize, comptime opt: Op
 
     @memcpy(self.xt, self.xk); // x(t_0) and x( t(j-1) )
 
-    for (self.gn) |t_right| { // for j = 1, 2, ...
+    for (self.bf) |t_right| { // for j = 1, 2, ...
         if (t_left == t_right) {
             if (opt.SHOW) debug.print("  t_left == t_right\n", .{});
             continue;
         }
         dt = t_right - t_left;
 
-        for (0..n) |i| self.pk[i] = if (t_left < self.tk[i]) -self.gk[i] else 0.0; // p(j-1)
-
         @memcpy(self.xc, self.xt); // xc ← x( t(j-1) )
+
+        for (self.pk, self.tk, self.gk) |*pk_i, tk_i, gk_i| pk_i.* = if (t_left < tk_i) -gk_i else 0.0; // p(j-1)
+
         // pᵀ⋅( Bk⋅x( t(j-1) ) + gk ) = pᵀ⋅( (Lk⋅Rk)⋅x( t(j-1) ) + gk )
         try trmv('R', 'N', self.Bk, self.xc);
         try trmv('R', 'T', self.Bk, self.xc);
@@ -314,7 +343,7 @@ fn project(self: *const Self, lb: []f64, ub: []f64, ta: *usize, comptime opt: Op
 
         if (dt <= dt_min) {
             if (opt.SHOW) debug.print("  << dt <= dt_min >>\n", .{});
-            for (0..n) |i| self.xt[i] += if (t_left < self.tk[i]) -dt * self.gk[i] else 0.0;
+            for (self.xt, self.tk, self.gk) |*xt_i, tk_i, gk_i| xt_i.* += if (t_left < tk_i) -dt * gk_i else 0.0;
             t_left = t_right;
         } else break;
     }
@@ -323,12 +352,11 @@ fn project(self: *const Self, lb: []f64, ub: []f64, ta: *usize, comptime opt: Op
     t_left += dt_min;
 
     ta.* = 0;
-
-    for (0..n) |i| {
-        if (t_left < self.tk[i]) {
-            self.xc[i] = self.xk[i] - t_left * self.gk[i];
+    for (self.xc, self.xk, self.tk, self.gk, 0..) |*xc_i, xk_i, tk_i, gk_i, i| {
+        if (t_left < tk_i) {
+            xc_i.* = xk_i - t_left * gk_i;
         } else {
-            self.xc[i] = self.xk[i] - self.tk[i] * self.gk[i];
+            xc_i.* = xk_i - tk_i * gk_i;
             self.iWk[ta.*] = i;
             ta.* += 1;
         }
@@ -349,53 +377,28 @@ fn solve(self: *const Self, obj: anytype, lb: []f64, ub: []f64, comptime opt: Op
 
     // = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = = =
 
+    try checkbounds(self.xk, lb, ub);
     obj.grad(self.xk, self.gk); // g₀ ← ∇f(x₀)
 
-    if (opt.SHOW) debug.print("x{d: <3} = {d: >9.6}, f{d: <3} = {e: <12.10}\n", .{ 0, self.xk, 0, obj.func(self.xk) });
+    if (opt.SHOW) debug.print("x{d: <3} = {d: >9.6}, f{d: <3} = {e}\n", .{ 0, self.xk, 0, obj.func(self.xk) });
 
     for (0..opt.KMAX) |kx| {
         try self.project(lb, ub, &ta, opt);
 
-        if (0 < ta) {
-            debug.print("  = = = = =\n", .{});
-
+        if (ta != 0) {
             for (0..ta, self.iWk[0..ta]) |ia, ja| {
                 @memset(self.AHA[ia], 0.0);
                 self.AHA[ia][ja] = 1.0;
             }
 
-            for (0..ta, self.iWk[0..ta]) |ia, ja| {
-                debug.print("  (ia, ja) = ({d}, {d}) => {d: >9.6}\n", .{ ia, ja, self.AHA[ia] });
-            }
-
-            debug.print("  = = = = =\n", .{});
-
             for (0..ta) |ia| try trsv('R', 'T', self.Bk, self.AHA[ia]);
             for (0..ta) |ia| try trsv('R', 'N', self.Bk, self.AHA[ia]);
 
-            for (0..ta, self.iWk[0..ta]) |ia, ja| {
-                debug.print("  (ia, ja) = ({d}, {d}) => {d: >9.6}\n", .{ ia, ja, self.AHA[ia] });
-            }
-
-            debug.print("  = = = = =\n", .{});
-
             for (0..ta) |i| {
-                for (0..ta, self.iWk[0..ta]) |j, ja| {
-                    self.AHA[i][j] = self.AHA[i][ja];
-                }
+                for (0..ta, self.iWk[0..ta]) |j, ja| self.AHA[i][j] = self.AHA[i][ja];
             }
-
-            for (0..ta, self.iWk[0..ta]) |ia, ja| {
-                debug.print("  (ia, ja) = ({d}, {d}) => {d: >9.6}\n", .{ ia, ja, self.AHA[ia][0..ta] });
-            }
-
-            debug.print("  = = = = =\n", .{});
 
             try cholesky(self.AHA[0..ta]);
-
-            for (0..ta, self.iWk[0..ta]) |ia, ja| {
-                debug.print("  (ia, ja) = ({d}, {d}) => {d: >9.6}\n", .{ ia, ja, self.AHA[ia][0..ta] });
-            }
 
             // pk ← Bk⁻¹⋅∇f(xk)
             @memcpy(self.pk, self.gk);
@@ -403,18 +406,10 @@ fn solve(self: *const Self, obj: anytype, lb: []f64, ub: []f64, comptime opt: Op
             try trsv('R', 'N', self.Bk, self.pk);
             for (self.pk, self.xc, self.xk) |*pk_i, xc_i, xk_i| pk_i.* = pk_i.* + xc_i - xk_i; // pk ← Bk⁻¹⋅∇f(xk) + (xc - xk)
 
-            debug.print("  pk = {d: >9.6}\n", .{self.pk});
-
-            for (0..ta, self.iWk[0..ta]) |i, ia| {
-                self.tk[i] = self.pk[ia]; // use tk as buffer
-            }
-
-            debug.print("  tk = {d: >9.6}\n", .{self.tk[0..ta]});
+            for (0..ta, self.iWk[0..ta]) |i, ia| self.tk[i] = self.pk[ia]; // use tk as buffer
 
             try trsv('L', 'N', self.AHA[0..ta], self.tk[0..ta]); // L⋅y = b
             try trsv('L', 'T', self.AHA[0..ta], self.tk[0..ta]); // Lᵀ⋅x = y
-
-            debug.print("  tk = {d: >9.6}\n", .{self.tk[0..ta]}); // Here, get the Lagrange multiplier λₖ
 
             @memset(self.pk, 0.0);
             for (self.iWk[0..ta], self.tk[0..ta]) |ia, lambda_ia| self.pk[ia] = lambda_ia; // Akᵀ⋅λₖ
@@ -424,28 +419,15 @@ fn solve(self: *const Self, obj: anytype, lb: []f64, ub: []f64, comptime opt: Op
             try trsv('R', 'T', self.Bk, self.pk);
             try trsv('R', 'N', self.Bk, self.pk);
 
-            debug.print("  = = = = =\n", .{});
-
-            debug.print("  pk = {d: >9.6}\n", .{self.pk});
-
-            for (self.tk, self.pk, self.xk, lb, ub) |*tk_i, pk_i, xk_i, lb_i, ub_i| {
-                if (0.0 < pk_i and ub_i < math.inf(f64)) {
-                    tk_i.* = (ub_i - xk_i) / pk_i;
-                } else if (pk_i < 0.0 and -math.inf(f64) < lb_i) {
-                    tk_i.* = (lb_i - xk_i) / pk_i;
-                } else tk_i.* = math.inf(f64);
-                if (tk_i.* == 0.0) tk_i.* = math.inf(f64);
-            }
-
-            insertionSort(self.tk);
-
-            debug.print("  line-search step max. = {d: >9.6}\n", .{self.tk[0]});
-
             // xn ← xk + α⋅pk, gn ← ∇f(xn)
-            self.search(obj, null, if (self.tk[0] < math.inf(f64)) self.tk[0] else null, opt) catch |err| {
+            self.search(obj, null, 1.0, opt) catch |err| {
                 switch (err) {
                     Errors.DescentDirectionError => {
-                        debug.print("Finished by non-descent direction.\n", .{});
+                        debug.print("Finished: Non-descent direction.\n", .{});
+                        break;
+                    },
+                    Errors.SearchError, Errors.ZoomError => {
+                        debug.print("Finished: No solution satisfies Wolfe condition.\n", .{});
                         break;
                     },
                     else => return err,
@@ -462,30 +444,25 @@ fn solve(self: *const Self, obj: anytype, lb: []f64, ub: []f64, comptime opt: Op
             self.search(obj, null, null, opt) catch |err| {
                 switch (err) {
                     Errors.DescentDirectionError => {
-                        debug.print("Finished by non-descent direction.\n", .{});
+                        debug.print("Finished: Non-descent direction.\n", .{});
+                        break;
+                    },
+                    Errors.SearchError, Errors.ZoomError => {
+                        debug.print("Finished: No solution satisfies Wolfe condition.\n", .{});
                         break;
                     },
                     else => return err,
                 }
             };
 
-            ta = 0;
-            for (self.xn, lb, ub) |*xn_i, lb_i, ub_i| {
-                if (xn_i.* < lb_i) {
-                    xn_i.* = lb_i;
-                    ta += 1;
-                } else if (ub_i < xn_i.*) {
-                    xn_i.* = ub_i;
-                    ta += 1;
-                }
-            }
-
-            if (0 < ta) obj.grad(self.xn, self.gn); // gn ← ∇f(xn)
+            truncate(self.xn, lb, ub, &ta);
+            if (ta != 0) obj.grad(self.xn, self.gn); // gn ← ∇f(xn)
         }
 
         // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
-        if (opt.SHOW) debug.print("x{d: <3} = {d: >9.6}, f{d: <3} = {e: <12.10}\n", .{ kx + 1, self.xn, kx + 1, obj.func(self.xn) });
+        try checkbounds(self.xn, lb, ub);
+        if (opt.SHOW) debug.print("x{d: <3} = {d: >9.6}, f{d: <3} = {e}\n", .{ kx + 1, self.xn, kx + 1, obj.func(self.xn) });
 
         // sk ← xn - xk
         for (self.sk, self.xn, self.xk) |*sk_i, xn_i, xk_i| sk_i.* = xn_i - xk_i;
@@ -510,10 +487,9 @@ fn solve(self: *const Self, obj: anytype, lb: []f64, ub: []f64, comptime opt: Op
 
         // secant_norm2 ← skᵀ⋅yk
         const secant_norm2: f64 = try dot(self.sk, self.yk);
-        // if (secant_norm2 <= 0.0) return Errors.CurvatureConditionError;
-
         rk = secant_norm2 / try dot(self.yk, self.yk); // γ = sᵀ⋅y / yᵀ⋅y
-        if (2.2e-16 < rk) {
+
+        if (2.2e-16 < rk) { // strong curvature condition
             // sk ← Lkᵀ⋅sk = Rk⋅sk
             try trmv('R', 'N', self.Bk, self.sk);
 
@@ -569,12 +545,14 @@ test "BFGS-B Test Case: Rosenbrock's function 2D ~ 5D" {
     defer bfgsb.deinit(page);
 
     const rosenbrock: Rosenbrock = .{ .a = 1.0, .b = 100.0 };
-    var lb: [2]f64 = .{ -1.0, 0.0 };
+    var lb: [2]f64 = .{ -2.0, -1.0 };
+    // var lb: [2]f64 = .{ -1.0, 0.0 };
     var ub: [2]f64 = .{ 0.8, 2.0 };
     // for (bfgsb.xk, 1..) |*p, i| p.* = if (i < n) -1.2 else 1.0;
-    inline for (bfgsb.xk, .{ -0.3, 1.8 }) |*p, v| p.* = v;
+    inline for (bfgsb.xk, .{ -1.2, 1.0 }) |*p, v| p.* = v;
+    // inline for (bfgsb.xk, .{ -0.3, 1.8 }) |*p, v| p.* = v;
 
-    try bfgsb.solve(rosenbrock, &lb, &ub, .{ .KMAX = 550, .SHOW = SHOW_ITERATIONS });
+    try bfgsb.solve(rosenbrock, &lb, &ub, .{ .KMAX = 550, .SHOW = SHOW_ITERATIONS, .XTOL = 1e-12, .GTOL = 1e-12 });
     // for (bfgsb.xk, 0..) |x, i| {
     //     if (testing.expectApproxEqRel(x, 1.0, 1e-12)) |_| {} else |_| debug.print("x[{d}] = {d}\n", .{ i, x });
     // }
