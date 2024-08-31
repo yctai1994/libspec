@@ -1,4 +1,5 @@
 const std = @import("std");
+const debug = std.debug;
 
 const findRoot = @import("./newton.zig").findRoot;
 
@@ -76,4 +77,12 @@ export fn solve_wgmm(
     } else {
         INFO.* = 0;
     }
+}
+
+const linearFit = @import("./linear-fit.zig").linearFit;
+
+export fn linear_fit(xptr: [*]f64, xnum: usize, yptr: [*]f64, ynum: usize, wptr: [*]f64) void {
+    linearFit(xptr[0..xnum], yptr[0..ynum], wptr[0..2]) catch {
+        debug.print("linear_fit: DimensionMismatch.\n", .{});
+    };
 }
